@@ -1,80 +1,117 @@
 version: "3.9"
 
+# ---------------------------------------------------------------------------
+# Minerva – Docker Compose
+#
+# Quick start:
+#   cp .env.example .env        # fill in secrets
+#   docker compose up -d
+#
+# Development (hot-reload):
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# All external traffic enters through Nginx on HTTP_PORT (default 80).
+# The backend and database are NOT exposed to the host in production.
+# ---------------------------------------------------------------------------
+
 services:
+  # ── Infrastructure ─────────────────────────────────────────────────────────
+
   db:
     image: postgres:16-alpine
+    env_file: .env
     environment:
-      POSTGRES_USER: minerva
-      POSTGRES_PASSWORD: minerva
-      POSTGRES_DB: minerva
-    ports:
-      - "5432:5432"
+      POSTGRES_USER: ${POSTGRES_USER:-minerva}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-minerva}
+      POSTGRES_DB: ${POSTGRES_DB:-minerva}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U minerva"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-minerva}"]
       interval: 5s
       timeout: 5s
       retries: 10
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    command: redis-server --save 60 1 --loglevel warning
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
+    restart: unless-stopped
+
+  # ── Application ────────────────────────────────────────────────────────────
 
   backend:
-    build: ./backend
-    env_file: ./backend/.env
+    build:
+      context: ./backend
+      target: production
+    env_file: .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://minerva:minerva@db:5432/minerva
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-minerva}:${POSTGRES_PASSWORD:-minerva}@db:5432/${POSTGRES_DB:-minerva}
       REDIS_URL: redis://redis:6379/0
-      DEBUG: "true"
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./backend:/app
+      DEBUG: "${DEBUG:-false}"
+      CORS_ORIGINS: '["http://localhost:${HTTP_PORT:-80}"]'
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
     command: >
-      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2"
+    restart: unless-stopped
+    # Backend is internal-only; traffic arrives via Nginx
 
   celery-worker:
-    build: ./backend
-    env_file: ./backend/.env
+    build:
+      context: ./backend
+      target: production
+    env_file: .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://minerva:minerva@db:5432/minerva
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-minerva}:${POSTGRES_PASSWORD:-minerva}@db:5432/${POSTGRES_DB:-minerva}
       REDIS_URL: redis://redis:6379/0
-    volumes:
-      - ./backend:/app
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
     command: celery -A app.worker.celery_app.celery_app worker --loglevel=info --concurrency=4
+    restart: unless-stopped
 
   celery-beat:
-    build: ./backend
-    env_file: ./backend/.env
+    build:
+      context: ./backend
+      target: production
+    env_file: .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://minerva:minerva@db:5432/minerva
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-minerva}:${POSTGRES_PASSWORD:-minerva}@db:5432/${POSTGRES_DB:-minerva}
       REDIS_URL: redis://redis:6379/0
-    volumes:
-      - ./backend:/app
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
     command: celery -A app.worker.celery_app.celery_app beat --loglevel=info
+    restart: unless-stopped
+
+  # ── Nginx – single entry point (SPA + reverse proxy) ────────────────────────
+
+  nginx:
+    build:
+      context: .
+      dockerfile: nginx/Dockerfile
+      target: production
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
 
 volumes:
   pgdata:
+  redisdata:

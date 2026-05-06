@@ -1,0 +1,27 @@
+# ---- Build stage ----
+FROM node:22-alpine AS builder
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY . .
+RUN npm run build
+
+# ---- Production stage ----
+FROM nginx:1.27-alpine AS production
+
+# Remove default nginx config
+RUN rm /etc/nginx/conf.d/default.conf
+
+# Copy built assets
+COPY --from=builder /app/dist /usr/share/nginx/html
+
+# Nginx will be configured by the nginx service; copy a minimal SPA fallback
+# config so the container can also be used standalone
+COPY docker/nginx-spa.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]

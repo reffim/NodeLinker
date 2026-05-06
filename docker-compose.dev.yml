@@ -1,0 +1,37 @@
+# Development overrides – hot-reload + exposed ports for local development
+# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+version: "3.9"
+
+services:
+  db:
+    ports:
+      - "5432:5432"
+
+  redis:
+    ports:
+      - "6379:6379"
+
+  backend:
+    build:
+      target: development
+    environment:
+      DEBUG: "true"
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    command: >
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+  celery-worker:
+    build:
+      target: development
+    volumes:
+      - ./backend:/app
+
+  celery-beat:
+    build:
+      target: development
+    volumes:
+      - ./backend:/app
