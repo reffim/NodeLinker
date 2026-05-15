@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_COOKIE: str = "access_token"
     REFRESH_TOKEN_COOKIE: str = "refresh_token"
 
-    # OIDC (optional – set to enable)
+    # OIDC (optional – set to enable; used for web UI access authentication)
     OIDC_ENABLED: bool = False
     OIDC_PROVIDER_NAME: str = "oidc"
     OIDC_CLIENT_ID: Optional[str] = None
@@ -33,6 +33,16 @@ class Settings(BaseSettings):
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
+
+    # HashiCorp Vault (used for Ansible SSH credential storage)
+    VAULT_URL: str = "http://localhost:8200"
+    VAULT_TOKEN: Optional[str] = None
+    VAULT_MOUNT_PATH: str = "secret"  # KV v2 mount path
+
+    # Job log storage (logs are streamed via Redis; persisted here after completion)
+    # LOG_STORAGE_TYPE: "local" stores to local FS; "s3" stores to S3-compatible storage
+    LOG_STORAGE_TYPE: str = "local"
+    LOG_STORAGE_BASE_PATH: str = "/var/log/minerva"
 
     # CORS
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:3000"]

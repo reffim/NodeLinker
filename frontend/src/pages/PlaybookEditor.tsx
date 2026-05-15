@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import MonacoEditor from '@monaco-editor/react'
 import { Plus, Trash2, Save, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -15,7 +14,7 @@ const DEFAULT_CONTENT = `---
   tasks:
     - name: Print hello
       debug:
-        msg: "Hello from Minerva"
+        msg: "Hello from NodeLinker"
 `
 
 interface FormData {
@@ -230,22 +229,14 @@ export default function PlaybookEditor() {
             </div>
           </div>
 
-          {/* Monaco editor */}
+          {/* Editor */}
           {form.source_type === 'local' ? (
-            <div className="flex-1 overflow-hidden">
-              <MonacoEditor
-                height="100%"
-                language="yaml"
+            <div className="flex-1 overflow-hidden p-4">
+              <textarea
+                className="w-full h-full p-4 font-mono text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none bg-muted/30"
+                placeholder="Enter YAML content here..."
                 value={form.content}
-                onChange={(val) => field('content', val ?? '')}
-                theme="vs-light"
-                options={{
-                  minimap: { enabled: false },
-                  fontSize: 13,
-                  lineNumbers: 'on',
-                  scrollBeyondLastLine: false,
-                  wordWrap: 'on',
-                }}
+                onChange={(e) => field('content', e.target.value)}
               />
             </div>
           ) : (

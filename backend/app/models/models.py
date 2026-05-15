@@ -3,7 +3,6 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
-    BigInteger,
     DateTime,
     Enum,
     ForeignKey,
@@ -42,6 +41,39 @@ class User(Base):
     )
 
     jobs: Mapped[list["Job"]] = relationship("Job", back_populates="creator")
+    credentials: Mapped[list["Credential"]] = relationship("Credential", back_populates="creator")
+
+
+# ---------------------------------------------------------------------------
+# Credentials
+# Metadata only — actual secret material is stored in HashiCorp Vault.
+# `vault_path` is the KV v2 path used to retrieve the secret.
+# ---------------------------------------------------------------------------
+class Credential(Base):
+    __tablename__ = "credentials"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    # type: 'ssh_key' | 'ssh_password'
+    type: Mapped[str] = mapped_column(
+        Enum("ssh_key", "ssh_password", name="credential_type"),
+        nullable=False,
+    )
+    vault_path: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    creator: Mapped[Optional["User"]] = relationship("User", back_populates="credentials")
+    nodes: Mapped[list["Node"]] = relationship("Node", back_populates="credential")
 
 
 # ---------------------------------------------------------------------------
@@ -57,7 +89,10 @@ class Node(Base):
     host: Mapped[str] = mapped_column(String(255), nullable=False)
     port: Mapped[int] = mapped_column(Integer, nullable=False, default=22)
     ssh_user: Mapped[str] = mapped_column(String(64), nullable=False, default="root")
-    ssh_key_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    # FK to credentials table; NULL = use Ansible default key discovery
+    credential_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("credentials.id", ondelete="SET NULL"), nullable=True
+    )
     status: Mapped[str] = mapped_column(
         Enum("online", "offline", "unreachable", "unknown", name="node_status"),
         nullable=False,
@@ -69,6 +104,7 @@ class Node(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
+    credential: Mapped[Optional["Credential"]] = relationship("Credential", back_populates="nodes")
     job_nodes: Mapped[list["JobNode"]] = relationship("JobNode", back_populates="node")
 
 
@@ -132,11 +168,13 @@ class Job(Base):
     playbook: Mapped["Playbook"] = relationship("Playbook", back_populates="jobs")
     creator: Mapped[Optional["User"]] = relationship("User", back_populates="jobs")
     job_nodes: Mapped[list["JobNode"]] = relationship("JobNode", back_populates="job")
-    logs: Mapped[list["JobLog"]] = relationship("JobLog", back_populates="job")
 
 
 # ---------------------------------------------------------------------------
 # Job-Node mapping
+# log_file_url: points to Object Storage (S3) or Local FS path where the
+# compressed log archive is stored after the job completes.
+# Real-time streaming is done via Redis pub/sub; this is the persistent record.
 # ---------------------------------------------------------------------------
 class JobNode(Base):
     __tablename__ = "job_nodes"
@@ -153,28 +191,7 @@ class JobNode(Base):
         default="pending",
     )
     exit_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    log_file_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
 
     job: Mapped["Job"] = relationship("Job", back_populates="job_nodes")
-    node: Mapped["Node"] = relationship("Node", back_populates="job_nodes")
-
-
-# ---------------------------------------------------------------------------
-# Job logs
-# ---------------------------------------------------------------------------
-class JobLog(Base):
-    __tablename__ = "job_logs"
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    job_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    node_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("nodes.id", ondelete="SET NULL"), nullable=True, index=True
-    )
-    line_number: Mapped[int] = mapped_column(Integer, nullable=False)
-    content: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-
-    job: Mapped["Job"] = relationship("Job", back_populates="logs")
+    node: Mapped[Optional["Node"]] = relationship("Node", back_populates="job_nodes")

@@ -10,7 +10,11 @@ class NodeCreate(BaseModel):
     host: str = Field(..., max_length=255)
     port: int = Field(22, ge=1, le=65535)
     ssh_user: str = Field("root", max_length=64)
-    ssh_key_path: Optional[str] = Field(None, max_length=512)
+    credential_id: Optional[uuid.UUID] = Field(
+        None,
+        description="ID of the Credential record whose Vault path holds the SSH key/password. "
+                    "If None, Ansible default key discovery is used.",
+    )
     tags: Optional[list[str]] = None
 
 
@@ -19,7 +23,7 @@ class NodeUpdate(BaseModel):
     host: Optional[str] = Field(None, max_length=255)
     port: Optional[int] = Field(None, ge=1, le=65535)
     ssh_user: Optional[str] = Field(None, max_length=64)
-    ssh_key_path: Optional[str] = Field(None, max_length=512)
+    credential_id: Optional[uuid.UUID] = None
     tags: Optional[list[str]] = None
 
 
@@ -29,7 +33,7 @@ class NodeResponse(BaseModel):
     host: str
     port: int
     ssh_user: str
-    ssh_key_path: Optional[str]
+    credential_id: Optional[uuid.UUID]
     status: str
     last_seen_at: Optional[datetime]
     tags: Optional[list[str]]

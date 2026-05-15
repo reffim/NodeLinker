@@ -3,7 +3,7 @@ FROM python:3.12-slim AS base
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq-dev gcc \
+    libpq-dev gcc sshpass openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

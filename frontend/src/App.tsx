@@ -5,6 +5,7 @@ import ProtectedRoute from '@/components/ProtectedRoute'
 import LoginPage from '@/pages/LoginPage'
 import NodeDashboard from '@/pages/NodeDashboard'
 import PlaybookEditor from '@/pages/PlaybookEditor'
+import ExclusiveGroups from '@/pages/ExclusiveGroups'
 import JobMonitor from '@/pages/JobMonitor'
 
 export default function App() {
@@ -28,6 +29,7 @@ export default function App() {
           <Route index element={<Navigate to="/nodes" replace />} />
           <Route path="nodes" element={<NodeDashboard />} />
           <Route path="playbooks" element={<PlaybookEditor />} />
+          <Route path="groups" element={<ExclusiveGroups />} />
           <Route path="jobs" element={<JobMonitor />} />
           <Route path="jobs/:jobId" element={<JobMonitor />} />
         </Route>

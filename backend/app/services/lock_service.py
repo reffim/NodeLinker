@@ -9,8 +9,8 @@ DEL with Lua ownership check to release safely.
 Design:
 - Acquire returns True (lock held by caller) or False (already held by another)
 - Release is a no-op if the token does not match (avoids releasing another owner's lock)
-- TTL is generous (LOCK_TTL_SECONDS) to survive long-running playbooks; the
-  release on completion is the authoritative unlock.
+- A heartbeat mechanism (extend_lock) periodically renews the TTL while the job
+  is running, preventing deadlocks from unexpected worker crashes.
 """
 
 import logging
@@ -22,13 +22,22 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Default TTL for exclusive locks: 2 hours (safety net if a worker crashes)
-LOCK_TTL_SECONDS: int = 7200
+# Default TTL for exclusive locks: 5 minutes initial window per heartbeat cycle
+LOCK_TTL_SECONDS: int = 300
 
 # Lua script: DEL key only if its value equals the given token (atomic ownership check)
 _RELEASE_SCRIPT = """
 if redis.call("GET", KEYS[1]) == ARGV[1] then
     return redis.call("DEL", KEYS[1])
+else
+    return 0
+end
+"""
+
+# Lua script: EXPIRE key only if its value equals the given token (atomic ownership check)
+_EXTEND_SCRIPT = """
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+    return redis.call("EXPIRE", KEYS[1], ARGV[2])
 else
     return 0
 end
@@ -65,6 +74,38 @@ async def acquire_lock(
             holder.decode() if isinstance(holder, bytes) else holder,
         )
     return acquired
+
+
+async def extend_lock(
+    redis_client: aioredis.Redis,
+    node_id: str,
+    playbook_group: str,
+    token: str,
+    ttl_seconds: int = LOCK_TTL_SECONDS,
+) -> bool:
+    """
+    Extend (renew) the TTL of an existing lock, only if the token matches.
+
+    Called periodically by a heartbeat coroutine while a job is running.
+    Prevents deadlocks caused by long-running jobs outliving the original TTL
+    or by worker crashes that never release the lock (TTL acts as safety net).
+
+    Returns True if the TTL was extended, False if the token did not match
+    (lock expired or stolen by another owner).
+    """
+    key = _lock_key(node_id, playbook_group)
+    extended = await redis_client.eval(  # type: ignore[arg-type]
+        _EXTEND_SCRIPT, 1, key, token, str(ttl_seconds)
+    )
+    if extended:
+        logger.debug("lock extended: key=%s token=%s ttl=%s", key, token, ttl_seconds)
+    else:
+        logger.warning(
+            "lock extend failed (token mismatch or expired): key=%s token=%s",
+            key,
+            token,
+        )
+    return bool(extended)
 
 
 async def release_lock(

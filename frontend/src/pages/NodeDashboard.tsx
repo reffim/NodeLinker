@@ -6,7 +6,10 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { listNodes, createNode, updateNode, deleteNode } from '@/api/nodes'
+import { listJobs } from '@/api/jobs'
+import { listPlaybooks } from '@/api/playbooks'
 import { useNodeStatusWS } from '@/hooks/useNodeStatusWS'
+import { Link } from 'react-router-dom'
 import type { Node, NodeCreate } from '@/types'
 
 function statusVariant(status: Node['status']): 'success' | 'destructive' | 'warning' | 'secondary' {
@@ -32,6 +35,8 @@ const EMPTY_FORM: NodeFormData = { name: '', host: '', port: '22', ssh_user: 'ro
 export default function NodeDashboard() {
   const queryClient = useQueryClient()
   const { data: nodes = [], isLoading } = useQuery({ queryKey: ['nodes'], queryFn: listNodes })
+  const { data: jobs = [] } = useQuery({ queryKey: ['jobs'], queryFn: () => listJobs(), refetchInterval: 10_000 })
+  const { data: playbooks = [] } = useQuery({ queryKey: ['playbooks'], queryFn: () => listPlaybooks() })
   useNodeStatusWS()
 
   const [showForm, setShowForm] = useState(false)
@@ -165,18 +170,51 @@ export default function NodeDashboard() {
                 <th className="px-4 py-2 text-left font-medium text-muted-foreground">Name</th>
                 <th className="px-4 py-2 text-left font-medium text-muted-foreground">Host</th>
                 <th className="px-4 py-2 text-left font-medium text-muted-foreground">Status</th>
+                <th className="px-4 py-2 text-left font-medium text-muted-foreground">Recent Job</th>
                 <th className="px-4 py-2 text-left font-medium text-muted-foreground">Tags</th>
                 <th className="px-4 py-2 text-left font-medium text-muted-foreground">Last Seen</th>
                 <th className="px-4 py-2" />
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {nodes.map((node) => (
+              {nodes.map((node) => {
+                // Find the most recent job that includes this node
+                // Assuming jobs are returned from backend in descending order of created_at
+                const recentJob = jobs.find(j => j.job_nodes.some(jn => jn.node_id === node.id))
+                const playbook = recentJob ? playbooks.find(p => p.id === recentJob.playbook_id) : null
+                const jn = recentJob?.job_nodes.find(jn => jn.node_id === node.id)
+                
+                return (
                 <tr key={node.id} className="hover:bg-muted/20 transition-colors">
                   <td className="px-4 py-3 font-medium">{node.name}</td>
                   <td className="px-4 py-3 text-muted-foreground">{node.host}:{node.port}</td>
                   <td className="px-4 py-3">
                     <Badge variant={statusVariant(node.status)}>{node.status}</Badge>
+                  </td>
+                  <td className="px-4 py-3 text-xs">
+                    {recentJob && playbook ? (
+                      <div className="flex flex-col gap-1 items-start">
+                        <Link to={`/jobs/${recentJob.id}`} className="text-primary hover:underline font-medium text-xs">
+                          {playbook.name}
+                        </Link>
+                        <div className="flex items-center gap-2">
+                          <span className="text-muted-foreground flex items-center gap-1 text-[10px]">
+                            <span className={`w-1.5 h-1.5 rounded-full ${recentJob.status === 'running' ? 'bg-blue-500 animate-pulse' : jn?.status === 'success' ? 'bg-green-500' : jn?.status === 'failed' ? 'bg-red-500' : 'bg-gray-400'}`}></span>
+                            {recentJob.status === 'running' ? 'Running' : jn?.status === 'success' ? 'Success' : jn?.status === 'failed' ? 'Failed' : recentJob.status}
+                          </span>
+                          <Link to={`/jobs?nodeId=${node.id}`} className="text-[10px] text-muted-foreground hover:text-primary transition-colors hover:underline">
+                            View history
+                          </Link>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-1 items-start">
+                        <span className="text-muted-foreground">—</span>
+                        <Link to={`/jobs?nodeId=${node.id}`} className="text-[10px] text-muted-foreground hover:text-primary transition-colors hover:underline">
+                          View history
+                        </Link>
+                      </div>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap gap-1">
@@ -204,7 +242,8 @@ export default function NodeDashboard() {
                     </div>
                   </td>
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
         </div>

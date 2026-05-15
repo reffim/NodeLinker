@@ -1,5 +1,5 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
-import { Server, BookOpen, Activity, LogOut } from 'lucide-react'
+import { Server, BookOpen, Activity, LogOut, Lock } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth'
 import { logout } from '@/api/auth'
@@ -7,6 +7,7 @@ import { logout } from '@/api/auth'
 const navItems = [
   { to: '/nodes', label: 'Nodes', icon: Server },
   { to: '/playbooks', label: 'Playbooks', icon: BookOpen },
+  { to: '/groups', label: 'Groups', icon: Lock },
   { to: '/jobs', label: 'Jobs', icon: Activity },
 ]
 
@@ -28,7 +29,7 @@ export default function Layout() {
       {/* Sidebar */}
       <aside className="w-56 flex-shrink-0 border-r border-border flex flex-col">
         <div className="px-4 py-5 border-b border-border">
-          <span className="font-bold text-lg tracking-tight">Minerva</span>
+          <span className="font-bold text-lg tracking-tight">NodeLinker</span>
         </div>
         <nav className="flex-1 py-4 px-2 space-y-1">
           {navItems.map(({ to, label, icon: Icon }) => (

@@ -1,9 +1,12 @@
 """
-SSH/ICMP health probe Celery task.
+Async SSH health probe Celery task.
 
-Every 30 s, probes all registered nodes via SSH (Paramiko) and updates
-node status in the database, then publishes a status-change event to
+Every 30 s, probes all registered nodes concurrently via asyncssh (non-blocking)
+and updates node status in the database, then publishes a status-change event to
 the Redis pub/sub channel "node_status" for WebSocket fan-out.
+
+SSH credentials are retrieved from HashiCorp Vault via the node's credential_id.
+If no credential is set, the probe falls back to TCP reachability (port check).
 """
 import asyncio
 import json
@@ -11,57 +14,72 @@ import logging
 import socket
 from datetime import datetime, timezone
 
-import paramiko
+import asyncssh
 import redis as sync_redis
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
+from app.core.vault import get_credential
 from app.db.session import async_session_factory
-from app.models.models import Node
+from app.models.models import Credential, Node
 from app.worker.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
 REDIS_CHANNEL = "node_status"
-SSH_TIMEOUT = 5  # seconds
+SSH_TIMEOUT = 5.0  # seconds
 
 
-def _probe_ssh(host: str, port: int, username: str, key_path: str | None) -> str:
+async def _probe_ssh(
+    host: str,
+    port: int,
+    username: str,
+    credential: Credential | None,
+    secret_data: dict | None,
+) -> str:
     """
-    Attempt an SSH connection to the node.
+    Attempt a non-blocking SSH connection via asyncssh.
     Returns: "online" | "offline" | "unreachable"
     """
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    try:
-        connect_kwargs: dict = {
-            "hostname": host,
-            "port": port,
-            "username": username,
-            "timeout": SSH_TIMEOUT,
-            "banner_timeout": SSH_TIMEOUT,
-            "auth_timeout": SSH_TIMEOUT,
-        }
-        if key_path:
-            connect_kwargs["key_filename"] = key_path
-        else:
-            connect_kwargs["look_for_keys"] = True
-            connect_kwargs["allow_agent"] = True
+    connect_kwargs: dict = {
+        "host": host,
+        "port": port,
+        "username": username,
+        "connect_timeout": SSH_TIMEOUT,
+        "known_hosts": None,  # accept any host key for health probing
+    }
+    if credential and secret_data:
+        if credential.type == "ssh_password":
+            connect_kwargs["password"] = secret_data.get("password")
+        elif credential.type == "ssh_key":
+            pk = secret_data.get("private_key")
+            if pk:
+                try:
+                    connect_kwargs["client_keys"] = [asyncssh.import_private_key(pk)]
+                except Exception as exc:
+                    logger.warning("health_probe: Failed to import private key for host=%s: %s", host, exc)
 
-        client.connect(**connect_kwargs)
-        return "online"
-    except paramiko.AuthenticationException:
+    try:
+        async with asyncssh.connect(**connect_kwargs):
+            return "online"
+    except asyncssh.PermissionDenied:
         # Auth failed but TCP reachable → host is up
         return "online"
-    except (paramiko.SSHException, socket.timeout, TimeoutError, OSError):
-        # Try ICMP-style TCP-connect fallback to port 22
+    except (asyncssh.DisconnectError, asyncssh.ConnectionLost, ConnectionRefusedError):
+        return "offline"
+    except (asyncio.TimeoutError, OSError, Exception) as exc:
+        logger.debug("health_probe: SSH failed host=%s: %s — falling back to TCP", host, exc)
+        # TCP port reachability fallback
         try:
-            with socket.create_connection((host, port), timeout=SSH_TIMEOUT):
-                return "offline"
-        except OSError:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection(host, port),
+                timeout=SSH_TIMEOUT,
+            )
+            writer.close()
+            return "offline"
+        except Exception:
             return "unreachable"
-    finally:
-        client.close()
 
 
 async def _update_node_status(node_id: str, status: str, last_seen_at: datetime | None) -> None:
@@ -92,9 +110,18 @@ def _publish_status(r: sync_redis.Redis, node_id: str, status: str, last_seen_at
 async def _probe_node(node: Node, r: sync_redis.Redis) -> None:
     old_status = node.status
     now = datetime.now(timezone.utc)
-    new_status = await asyncio.get_event_loop().run_in_executor(
-        None, _probe_ssh, node.host, node.port, node.ssh_user, node.ssh_key_path
-    )
+
+    # Fetch credential from Vault (async, non-blocking)
+    secret_data = None
+    if node.credential:
+        try:
+            secret_data = await get_credential(node.credential.vault_path)
+        except Exception as exc:
+            logger.warning("health_probe: vault read failed path=%s: %s", node.credential.vault_path, exc)
+
+    # Run the async SSH probe directly (no thread executor needed)
+    new_status = await _probe_ssh(node.host, node.port, node.ssh_user, node.credential, secret_data)
+
     last_seen = now if new_status == "online" else node.last_seen_at
     await _update_node_status(str(node.id), new_status, last_seen)
     if old_status != new_status:
@@ -106,9 +133,12 @@ async def _run_probes() -> None:
     r = sync_redis.from_url(settings.REDIS_URL, decode_responses=True)
     try:
         async with async_session_factory() as session:
-            result = await session.execute(select(Node))
+            result = await session.execute(
+                select(Node).options(selectinload(Node.credential))
+            )
             nodes = result.scalars().all()
 
+        # Probe all nodes concurrently — asyncssh is non-blocking, scales well
         tasks = [_probe_node(node, r) for node in nodes]
         await asyncio.gather(*tasks, return_exceptions=True)
     finally:

@@ -28,6 +28,11 @@ export async function getJobLogs(id: string): Promise<JobLog[]> {
   return data
 }
 
+export async function getJobNodeLogsContent(jobId: string, nodeId: string): Promise<string[]> {
+  const { data } = await client.get<string[]>(`/jobs/${jobId}/nodes/${nodeId}/logs/content`)
+  return data
+}
+
 export async function cancelJob(id: string): Promise<Job> {
   const { data } = await client.post<Job>(`/jobs/${id}/cancel`)
   return data

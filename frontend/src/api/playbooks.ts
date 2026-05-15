@@ -24,3 +24,8 @@ export async function updatePlaybook(id: string, payload: PlaybookUpdate): Promi
 export async function deletePlaybook(id: string): Promise<void> {
   await client.delete(`/playbooks/${id}`)
 }
+
+export async function forceUnlockGroup(groupName: string): Promise<{message: string}> {
+  const { data } = await client.post<{message: string}>(`/playbooks/groups/${groupName}/unlock`)
+  return data
+}

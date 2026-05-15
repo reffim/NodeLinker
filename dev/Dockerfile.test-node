@@ -1,0 +1,24 @@
+# Test SSH target node for local Ansible development
+# Minimal Ubuntu with OpenSSH — accepts key-based and password auth
+FROM ubuntu:24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openssh-server \
+    python3 \
+    sudo \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir /run/sshd
+
+# Create a test user with a known password (for local dev only)
+RUN useradd -m -s /bin/bash testuser \
+    && echo "testuser:testpassword" | chpasswd \
+    && echo "testuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+# Allow password auth and root login for development convenience
+RUN sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config \
+    && sed -i 's/#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config \
+    && sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+
+EXPOSE 22
+
+CMD ["/usr/sbin/sshd", "-D"]

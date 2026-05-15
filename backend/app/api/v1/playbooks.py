@@ -91,3 +91,28 @@ async def _get_or_404(db: AsyncSession, playbook_id: uuid.UUID) -> Playbook:
     if playbook is None:
         raise HTTPException(status_code=404, detail="Playbook not found")
     return playbook
+
+
+@router.post("/groups/{group_name}/unlock", status_code=status.HTTP_200_OK)
+async def force_unlock_group(
+    group_name: str,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Force release all Redis locks for a specific exclusive group across all nodes."""
+    if current_user.role not in ("admin", "operator"):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    
+    import redis.asyncio as aioredis
+    from app.core.config import settings
+    
+    r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+    try:
+        # Find all lock keys for this group
+        pattern = f"node:*:exclusive:{group_name}"
+        keys = await r.keys(pattern)
+        if keys:
+            await r.delete(*keys)
+            return {"message": f"Cleared {len(keys)} locks for group '{group_name}'"}
+        return {"message": f"No active locks found for group '{group_name}'"}
+    finally:
+        await r.aclose()

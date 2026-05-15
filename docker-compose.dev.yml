@@ -12,6 +12,18 @@ services:
     ports:
       - "6379:6379"
 
+  vault:
+    ports:
+      - "8200:8200"
+
+  test-node:
+    ports:
+      - "2222:22"
+
+  test-node-2:
+    ports:
+      - "2223:22"
+
   backend:
     build:
       target: development
@@ -19,6 +31,7 @@ services:
       DEBUG: "true"
     volumes:
       - ./backend:/app
+      - logdata:/var/log/minerva
     ports:
       - "8000:8000"
     command: >
@@ -29,9 +42,13 @@ services:
       target: development
     volumes:
       - ./backend:/app
+      - logdata:/var/log/minerva
 
   celery-beat:
     build:
       target: development
     volumes:
       - ./backend:/app
+
+volumes:
+  logdata:

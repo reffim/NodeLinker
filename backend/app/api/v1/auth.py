@@ -64,25 +64,32 @@ async def register(
     response: Response,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> TokenResponse:
-    # Check uniqueness
-    existing = await db.execute(
-        select(User).where((User.username == body.username) | (User.email == body.email))
-    )
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Username or email already registered")
+    try:
+        # Check uniqueness
+        existing = await db.execute(
+            select(User).where((User.username == body.username) | (User.email == body.email))
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="Username or email already registered")
 
-    user = User(
-        username=body.username,
-        email=body.email,
-        password_hash=hash_password(body.password),
-        role="admin" if await _is_first_user(db) else "operator",
-    )
-    db.add(user)
-    await db.commit()
-    await db.refresh(user)
+        user = User(
+            username=body.username,
+            email=body.email,
+            password_hash=hash_password(body.password),
+            role="admin" if await _is_first_user(db) else "operator",
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
 
-    _set_auth_cookies(response, user)
-    return TokenResponse(user=UserResponse.model_validate(user))
+        _set_auth_cookies(response, user)
+        return TokenResponse(user=UserResponse.model_validate(user))
+    except Exception as e:
+        import traceback
+        with open("/app/error.log", "w") as f:
+            f.write(traceback.format_exc())
+        raise e
+
 
 
 @router.post("/login", response_model=TokenResponse)

@@ -11,7 +11,7 @@ from app.ws.jobs import job_log_ws
 
 app = FastAPI(
     title=settings.APP_NAME,
-    description="Minerva – Infrastructure Automation Platform",
+    description="NodeLinker – Infrastructure Automation Platform",
     version="0.1.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc",

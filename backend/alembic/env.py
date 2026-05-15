@@ -10,11 +10,11 @@ from alembic import context
 # Import models so Alembic autogenerate sees them
 from app.models.models import (  # noqa: F401
     User,
+    Credential,
     Node,
     Playbook,
     Job,
     JobNode,
-    JobLog,
 )
 from app.db.session import Base
 from app.core.config import settings

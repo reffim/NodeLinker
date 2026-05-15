@@ -1,0 +1,20 @@
+---
+- name: Check CPU and Memory Status
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Get Memory Usage
+      command: free -h
+      register: mem_output
+
+    - name: Get CPU Load and Uptime
+      command: uptime
+      register: cpu_output
+
+    - name: Display Memory Status
+      debug:
+        msg: "{{ mem_output.stdout_lines }}"
+
+    - name: Display CPU Status
+      debug:
+        msg: "{{ cpu_output.stdout }}"

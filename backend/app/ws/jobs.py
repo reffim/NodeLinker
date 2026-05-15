@@ -7,13 +7,15 @@ Protocol:
   Server → Client messages (JSON):
     {"type": "log", "line_number": N, "content": "...", "node_id": "..."}
     {"type": "done", "status": "success|failed|cancelled", "node_id": "..."}
+    {"type": "replay_url", "node_id": "...", "log_file_url": "..."}
     {"type": "error", "detail": "..."}
+
+  For jobs already completed (reconnecting clients), the server sends
+  type=="replay_url" messages with log_file_url for each node, then closes.
+  Real-time streaming is only active while the job is running.
 
   The client should close the connection after receiving type=="done" for all
   dispatched nodes, or it may close at any time (server handles it gracefully).
-
-  If the job already has collected logs (resumed connection), the endpoint
-  sends existing DB logs first, then switches to live pub/sub.
 """
 import asyncio
 import json
@@ -26,7 +28,7 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.db.session import async_session_factory
-from app.models.models import Job, JobLog, JobNode
+from app.models.models import Job, JobNode
 
 logger = logging.getLogger(__name__)
 
@@ -51,18 +53,10 @@ async def job_log_ws(websocket: WebSocket, job_id: uuid.UUID) -> None:
             await websocket.close(code=4004)
             return
 
-        # Replay existing logs from DB (catch-up for reconnecting clients)
-        logs_res = await session.execute(
-            select(JobLog)
-            .where(JobLog.job_id == job_id)
-            .order_by(JobLog.node_id, JobLog.line_number)
-        )
-        existing_logs = logs_res.scalars().all()
-
         # Check if job is already in terminal state
         terminal = job.status in ("success", "failed", "cancelled")
 
-        # Load job_nodes to know how many done events to expect
+        # Load job_nodes to know status and log URLs
         jn_res = await session.execute(
             select(JobNode).where(JobNode.job_id == job_id)
         )
@@ -70,20 +64,18 @@ async def job_log_ws(websocket: WebSocket, job_id: uuid.UUID) -> None:
         total_nodes = len(job_nodes)
         done_nodes = sum(1 for jn in job_nodes if jn.status in ("success", "failed"))
 
-    # 2. Send existing logs to catch up
-    for log in existing_logs:
-        try:
-            await websocket.send_json({
-                "type": "log",
-                "line_number": log.line_number,
-                "content": log.content,
-                "node_id": str(log.node_id) if log.node_id else None,
-            })
-        except WebSocketDisconnect:
-            return
-
-    # 3. If already terminal, send done and close
+    # 2. If already terminal, send log_file_url replay messages and close
+    #    (logs are stored in Object Storage / Local FS after job completion)
     if terminal:
+        for jn in job_nodes:
+            try:
+                await websocket.send_json({
+                    "type": "replay_url",
+                    "node_id": str(jn.node_id),
+                    "log_file_url": jn.log_file_url,  # may be None if storage failed
+                })
+            except WebSocketDisconnect:
+                return
         try:
             await websocket.send_json({
                 "type": "done",
@@ -96,7 +88,7 @@ async def job_log_ws(websocket: WebSocket, job_id: uuid.UUID) -> None:
         await websocket.close()
         return
 
-    # 4. Subscribe to Redis pub/sub and stream live logs
+    # 3. Subscribe to Redis pub/sub and stream live logs
     redis_client = aioredis.from_url(settings.REDIS_URL)
     pubsub = redis_client.pubsub()
     await pubsub.subscribe(channel)

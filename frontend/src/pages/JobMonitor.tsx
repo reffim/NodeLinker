@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { Play, XCircle, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { listJobs, getJob, createJob, cancelJob } from '@/api/jobs'
-import { listPlaybooks } from '@/api/playbooks'
+import { listJobs, getJob, createJob, cancelJob, getJobNodeLogsContent } from '@/api/jobs'
+import { getPlaybook, listPlaybooks } from '@/api/playbooks'
 import { listNodes } from '@/api/nodes'
 import { useJobLogsWS } from '@/hooks/useJobLogsWS'
 import type { Job } from '@/types'
@@ -106,16 +106,59 @@ function RunJobModal({ onClose }: { onClose: () => void }) {
 function LogPanel({ jobId }: { jobId: string }) {
   const { lines, done, finalStatus } = useJobLogsWS(jobId)
   const { data: job } = useQuery({ queryKey: ['job', jobId], queryFn: () => getJob(jobId), enabled: !!jobId })
+
+  const { data: playbook } = useQuery({
+    queryKey: ['playbook', job?.playbook_id],
+    queryFn: () => getPlaybook(job!.playbook_id),
+    enabled: !!job?.playbook_id
+  })
+
+  const { data: allNodes = [] } = useQuery({
+    queryKey: ['nodes'],
+    queryFn: () => listNodes()
+  })
   const endRef = useRef<HTMLDivElement>(null)
+  
+  const [staticLines, setStaticLines] = useState<{node_id: string, content: string}[]>([])
+  const [loadingStatic, setLoadingStatic] = useState(false)
+  const [staticLoaded, setStaticLoaded] = useState(false)
+
+  useEffect(() => {
+    if (job && (job.status === 'success' || job.status === 'failed' || job.status === 'cancelled')) {
+      if (lines.length === 0 && !staticLoaded && !loadingStatic) {
+        setLoadingStatic(true)
+        const fetchAllLogs = async () => {
+          let allLines: {node_id: string, content: string}[] = []
+          for (const node of job.job_nodes) {
+            try {
+              const contents = await getJobNodeLogsContent(jobId, node.node_id)
+              allLines = allLines.concat(contents.map(c => ({ node_id: node.node_id, content: c })))
+            } catch (e) {
+              allLines.push({ node_id: node.node_id, content: `Failed to load logs: ${e}` })
+            }
+          }
+          setStaticLines(allLines)
+          // Always reset loading state so it doesn't get stuck
+          setLoadingStatic(false)
+          setStaticLoaded(true)
+        }
+        fetchAllLogs()
+      }
+    }
+  }, [job?.status, lines.length, jobId, staticLoaded, loadingStatic])
+
+  const displayLines = lines.length > 0 ? lines : staticLines
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [lines])
+  }, [displayLines])
 
   return (
     <div className="flex flex-col h-full">
       <div className="px-4 py-3 border-b border-border flex items-center gap-3">
-        <span className="font-medium text-sm">Job Logs</span>
+        <span className="font-medium text-sm text-foreground">
+          {playbook ? playbook.name : 'Job Logs'}
+        </span>
         {job && <Badge variant={jobStatusVariant(job.status)}>{job.status}</Badge>}
         {done && finalStatus && (
           <span className="text-xs text-muted-foreground ml-auto">Completed: {finalStatus}</span>
@@ -124,25 +167,31 @@ function LogPanel({ jobId }: { jobId: string }) {
 
       {job && job.job_nodes.length > 0 && (
         <div className="px-4 py-2 border-b border-border flex gap-3 flex-wrap">
-          {job.job_nodes.map((jn) => (
-            <div key={jn.node_id} className="flex items-center gap-1.5 text-xs">
-              <span className="text-muted-foreground">{jn.node_id.slice(0, 8)}…</span>
-              <Badge variant={jn.status === 'success' ? 'success' : jn.status === 'failed' ? 'destructive' : 'warning'}>
-                {jn.status}
-              </Badge>
-              {jn.exit_code !== null && (
-                <span className="text-muted-foreground">exit={jn.exit_code}</span>
-              )}
-            </div>
-          ))}
+          {job.job_nodes.map((jn) => {
+            const node = allNodes.find(n => n.id === jn.node_id)
+            return (
+              <div key={jn.node_id} className="flex items-center gap-1.5 text-xs bg-muted/50 px-2 py-1 rounded">
+                <span className="font-medium text-foreground">{node ? node.name : `${jn.node_id.slice(0, 8)}…`}</span>
+                <Badge variant={jn.status === 'success' ? 'success' : jn.status === 'failed' ? 'destructive' : 'warning'} className="text-[10px] px-1 py-0 h-4">
+                  {jn.status}
+                </Badge>
+                {jn.exit_code !== null && (
+                  <span className="text-muted-foreground">exit={jn.exit_code}</span>
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
 
       <div className="flex-1 overflow-y-auto bg-gray-950 text-gray-100 font-mono text-xs p-4 space-y-0.5">
-        {lines.length === 0 && !done && (
+        {displayLines.length === 0 && !done && !loadingStatic && (
           <p className="text-gray-500">Waiting for output…</p>
         )}
-        {lines.map((line, i) => (
+        {displayLines.length === 0 && loadingStatic && (
+          <p className="text-gray-500">Loading archived logs…</p>
+        )}
+        {displayLines.map((line, i) => (
           <div key={i} className="leading-5">
             {line.node_id && (
               <span className="text-gray-500 mr-2">[{line.node_id.slice(0, 8)}]</span>
@@ -159,13 +208,25 @@ function LogPanel({ jobId }: { jobId: string }) {
 export default function JobMonitor() {
   const { jobId } = useParams<{ jobId: string }>()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const queryClient = useQueryClient()
+  
+  const filterNodeId = searchParams.get('nodeId')
+
+  const { data: allNodes = [] } = useQuery({
+    queryKey: ['nodes'],
+    queryFn: () => listNodes()
+  })
 
   const { data: jobs = [], isLoading } = useQuery({
     queryKey: ['jobs'],
     queryFn: () => listJobs(),
     refetchInterval: 10_000,
   })
+
+  const filteredJobs = filterNodeId
+    ? jobs.filter(job => job.job_nodes.some(jn => jn.node_id === filterNodeId))
+    : jobs
 
   const [showRunModal, setShowRunModal] = useState(false)
 
@@ -178,19 +239,31 @@ export default function JobMonitor() {
     <div className="flex h-full">
       {/* Job list sidebar */}
       <div className="w-72 flex-shrink-0 border-r border-border flex flex-col">
-        <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-          <span className="font-medium text-sm">Jobs</span>
-          <Button variant="ghost" size="sm" onClick={() => setShowRunModal(true)}>
-            <Play className="h-4 w-4 mr-1" /> Run
-          </Button>
+        <div className="px-4 py-3 border-b border-border space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="font-medium text-sm">Jobs</span>
+            <Button variant="ghost" size="sm" onClick={() => setShowRunModal(true)}>
+              <Play className="h-4 w-4 mr-1" /> Run
+            </Button>
+          </div>
+          <select 
+            className="w-full text-xs p-1.5 rounded border border-input bg-transparent text-foreground"
+            value={filterNodeId || ''}
+            onChange={(e) => setSearchParams(e.target.value ? { nodeId: e.target.value } : {})}
+          >
+            <option value="">All Nodes</option>
+            {allNodes.map(node => (
+              <option key={node.id} value={node.id}>{node.name}</option>
+            ))}
+          </select>
         </div>
         <div className="flex-1 overflow-y-auto divide-y divide-border">
           {isLoading ? (
             <p className="px-4 py-3 text-sm text-muted-foreground">Loading…</p>
-          ) : jobs.length === 0 ? (
-            <p className="px-4 py-3 text-sm text-muted-foreground">No jobs yet.</p>
+          ) : filteredJobs.length === 0 ? (
+            <p className="px-4 py-3 text-sm text-muted-foreground">No jobs found.</p>
           ) : (
-            jobs.map((job) => (
+            filteredJobs.map((job) => (
               <button
                 key={job.id}
                 onClick={() => navigate(`/jobs/${job.id}`)}
@@ -228,7 +301,7 @@ export default function JobMonitor() {
       {/* Log panel */}
       <div className="flex-1 overflow-hidden">
         {jobId ? (
-          <LogPanel jobId={jobId} />
+          <LogPanel key={jobId} jobId={jobId} />
         ) : (
           <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
             Select a job to view logs

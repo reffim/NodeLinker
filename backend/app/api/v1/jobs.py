@@ -16,8 +16,8 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user
 from app.db.session import get_db
-from app.models.models import Job, JobLog, JobNode, Node, Playbook, User
-from app.schemas.jobs import JobCreate, JobLogResponse, JobResponse
+from app.models.models import Job, JobNode, Node, Playbook, User
+from app.schemas.jobs import JobCreate, JobNodeResponse, JobResponse
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -122,24 +122,64 @@ async def get_job(
     return job
 
 
-@router.get("/{job_id}/logs", response_model=list[JobLogResponse])
+@router.get("/{job_id}/logs", response_model=list[JobNodeResponse])
 async def get_job_logs(
     job_id: uuid.UUID,
-    node_id: uuid.UUID | None = None,
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(get_current_user),
-) -> list[JobLog]:
+) -> list[JobNode]:
+    """
+    Return per-node log file URLs for a completed job.
+    Real-time streaming during execution is available via WebSocket /ws/jobs/{job_id}.
+    After completion, logs are stored in Object Storage (S3) or Local FS;
+    `log_file_url` in each entry points to the archived log file.
+    """
     job_result = await db.execute(select(Job).where(Job.id == job_id))
     if job_result.scalar_one_or_none() is None:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    query = select(JobLog).where(JobLog.job_id == job_id)
-    if node_id is not None:
-        query = query.where(JobLog.node_id == node_id)
-    query = query.order_by(JobLog.node_id, JobLog.line_number)
-
-    result = await db.execute(query)
+    result = await db.execute(
+        select(JobNode).where(JobNode.job_id == job_id).order_by(JobNode.node_id)
+    )
     return list(result.scalars().all())
+
+
+@router.get("/{job_id}/nodes/{node_id}/logs/content", response_model=list[str])
+async def get_job_node_logs_content(
+    job_id: uuid.UUID,
+    node_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(get_current_user),
+) -> list[str]:
+    """Fetch the actual lines of the log file from storage if the job is done."""
+    result = await db.execute(
+        select(JobNode).where(
+            JobNode.job_id == job_id, JobNode.node_id == node_id
+        )
+    )
+    jn = result.scalar_one_or_none()
+    if jn is None:
+        raise HTTPException(status_code=404, detail="JobNode not found")
+    
+    if not jn.log_file_url:
+        return []
+
+    # Currently we only support local file:// urls
+    if jn.log_file_url.startswith("file://"):
+        import gzip
+        from pathlib import Path
+        
+        path = Path(jn.log_file_url[7:])
+        if not path.exists():
+            return ["[Log file not found on server]"]
+        
+        try:
+            with gzip.open(path, "rt", encoding="utf-8") as f:
+                return [line.rstrip('\n') for line in f]
+        except Exception as e:
+            return [f"[Error reading log file: {e}]"]
+            
+    return ["[Unsupported log URL format]"]
 
 
 @router.post("/{job_id}/cancel", response_model=JobResponse)
