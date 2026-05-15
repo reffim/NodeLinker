@@ -15,8 +15,24 @@ export default function ExclusiveGroups() {
   })
 
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const [editingGroup, setEditingGroup] = useState<string | null>(null)
   const [newGroupName, setNewGroupName] = useState('')
   const [selectedPlaybooks, setSelectedPlaybooks] = useState<string[]>([])
+
+  function openCreateModal() {
+    setEditingGroup(null)
+    setNewGroupName('')
+    setSelectedPlaybooks([])
+    setShowCreateModal(true)
+  }
+
+  function openEditModal(groupName: string) {
+    setEditingGroup(groupName)
+    setNewGroupName(groupName)
+    const currentInGroup = playbooks.filter(pb => pb.exclusive_group === groupName).map(pb => pb.id)
+    setSelectedPlaybooks(currentInGroup)
+    setShowCreateModal(true)
+  }
 
   const unlockMutation = useMutation({
     mutationFn: forceUnlockGroup,
@@ -31,15 +47,24 @@ export default function ExclusiveGroups() {
 
   const assignGroupMutation = useMutation({
     mutationFn: async ({ group, playbookIds }: { group: string, playbookIds: string[] }) => {
-      for (const id of playbookIds) {
-        await updatePlaybook(id, { exclusive_group: group })
+      // Find all playbooks that currently belong to this group (only relevant if editing)
+      const currentInGroup = editingGroup ? playbooks.filter(pb => pb.exclusive_group === editingGroup).map(pb => pb.id) : []
+      
+      const toRemove = currentInGroup.filter(id => !playbookIds.includes(id))
+      const toAdd = playbookIds.filter(id => !currentInGroup.includes(id))
+
+      const promises = []
+      for (const id of toRemove) {
+        promises.push(updatePlaybook(id, { exclusive_group: "" as string }))
       }
+      for (const id of toAdd) {
+        promises.push(updatePlaybook(id, { exclusive_group: group }))
+      }
+      await Promise.all(promises)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['playbooks'] })
       setShowCreateModal(false)
-      setNewGroupName('')
-      setSelectedPlaybooks([])
     }
   })
 
@@ -61,7 +86,7 @@ export default function ExclusiveGroups() {
     <div className="p-6 overflow-y-auto h-full relative">
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-2xl font-bold">Exclusive Groups</h1>
-        <Button onClick={() => setShowCreateModal(true)}>
+        <Button onClick={openCreateModal}>
           <Plus className="w-4 h-4 mr-2" />
           Create Group
         </Button>
@@ -79,20 +104,29 @@ export default function ExclusiveGroups() {
                 )}
               </div>
               {groupName !== 'No Group' && (
-                <Button 
-                  variant="outline" 
-                  size="sm" 
-                  className="text-orange-600 border-orange-200 hover:bg-orange-50"
-                  disabled={unlockMutation.isPending}
-                  onClick={() => {
-                    if(confirm(`Are you sure you want to forcefully unlock the '${groupName}' group? This should only be used if a job crashed while holding the lock.`)) {
-                      unlockMutation.mutate(groupName)
-                    }
-                  }}
-                >
-                  <Unlock className="w-4 h-4 mr-2" />
-                  Force Unlock
-                </Button>
+                <div className="flex gap-2">
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={() => openEditModal(groupName)}
+                  >
+                    Edit Group
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="text-orange-600 border-orange-200 hover:bg-orange-50"
+                    disabled={unlockMutation.isPending}
+                    onClick={() => {
+                      if(confirm(`Are you sure you want to forcefully unlock the '${groupName}' group? This should only be used if a job crashed while holding the lock.`)) {
+                        unlockMutation.mutate(groupName)
+                      }
+                    }}
+                  >
+                    <Unlock className="w-4 h-4 mr-2" />
+                    Force Unlock
+                  </Button>
+                </div>
               )}
             </div>
             <ul className="space-y-2">
@@ -111,7 +145,7 @@ export default function ExclusiveGroups() {
       {showCreateModal && (
         <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center">
           <div className="bg-card text-card-foreground border border-border p-6 rounded-lg shadow-lg w-[400px]">
-            <h2 className="text-lg font-semibold mb-4">Create Exclusive Group</h2>
+            <h2 className="text-lg font-semibold mb-4">{editingGroup ? 'Edit Exclusive Group' : 'Create Exclusive Group'}</h2>
             <div className="space-y-4">
               <div>
                 <label className="text-sm font-medium mb-1 block">Group Name *</label>
@@ -119,6 +153,7 @@ export default function ExclusiveGroups() {
                   value={newGroupName} 
                   onChange={(e) => setNewGroupName(e.target.value)} 
                   placeholder="e.g. production-deploy"
+                  disabled={!!editingGroup}
                 />
               </div>
               <div>

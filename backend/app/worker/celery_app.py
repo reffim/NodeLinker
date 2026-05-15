@@ -4,7 +4,7 @@ from celery.schedules import crontab
 from app.core.config import settings
 
 celery_app = Celery(
-    "minerva",
+    "nodelinker",
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
     include=[

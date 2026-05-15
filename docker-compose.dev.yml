@@ -31,7 +31,7 @@ services:
       DEBUG: "true"
     volumes:
       - ./backend:/app
-      - logdata:/var/log/minerva
+      - logdata:/var/log/nodelinker
     ports:
       - "8000:8000"
     command: >
@@ -42,7 +42,7 @@ services:
       target: development
     volumes:
       - ./backend:/app
-      - logdata:/var/log/minerva
+      - logdata:/var/log/nodelinker
 
   celery-beat:
     build:

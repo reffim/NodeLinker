@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ===========================================================================
-# Minerva Local Dev – Seed Script
+# NodeLinker Local Dev – Seed Script
 #
 # Initializes Vault with test SSH credentials and registers a test node
-# via the Minerva API. Run after `docker compose up` is fully healthy.
+# via the NodeLinker API. Run after `docker compose up` is fully healthy.
 #
 # Prerequisites:
 #   - All services running (db, redis, vault, backend, test-node)
@@ -18,13 +18,13 @@ set -uo pipefail
 
 API_URL="${API_URL:-http://localhost:8000/api/v1}"
 VAULT_ADDR="${VAULT_ADDR:-http://localhost:8200}"
-VAULT_TOKEN="${VAULT_TOKEN:-minerva-dev-token}"
+VAULT_TOKEN="${VAULT_TOKEN:-nodelinker-dev-token}"
 
 # Temporary cookie jar for JWT (auth is cookie-based, not bearer token in body)
 COOKIE_JAR=$(mktemp)
 trap 'rm -f "$COOKIE_JAR"' EXIT
 
-echo "=== Minerva Local Dev Seed ==="
+echo "=== NodeLinker Local Dev Seed ==="
 echo ""
 
 # ---------------------------------------------------------------------------

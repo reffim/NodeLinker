@@ -15,6 +15,6 @@ export const useAuthStore = create<AuthState>()(
       setUser: (user) => set({ user }),
       isAuthenticated: () => get().user !== null,
     }),
-    { name: "minerva-auth" }
+    { name: "nodelinker-auth" }
   )
 )

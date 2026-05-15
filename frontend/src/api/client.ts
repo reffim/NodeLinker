@@ -11,7 +11,7 @@ client.interceptors.response.use(
   (err) => {
     if (err.response?.status === 401) {
       // Clear auth state to prevent infinite redirect loops
-      localStorage.removeItem("minerva-auth")
+      localStorage.removeItem("nodelinker-auth")
       // Redirect to login on auth failure
       window.location.href = "/login"
     }

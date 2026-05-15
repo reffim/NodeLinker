@@ -1,0 +1,13 @@
+- name: Append current time to time.txt
+  hosts: all
+  tasks:
+    - name: Append current timestamp to /tmp/time.txt
+      shell: date "+%Y-%m-%d %H:%M:%S" >> /tmp/time.txt
+
+    - name: Display the appended time
+      command: tail -n 1 /tmp/time.txt
+      register: result
+
+    - name: Show result
+      debug:
+        msg: "Successfully added time: {{ result.stdout }}"

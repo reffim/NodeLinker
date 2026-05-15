@@ -1,7 +1,7 @@
 version: "3.9"
 
 # ---------------------------------------------------------------------------
-# Minerva – Docker Compose
+# NodeLinker – Docker Compose
 #
 # Quick start:
 #   cp .env.example .env        # fill in secrets
@@ -21,13 +21,13 @@ services:
     image: postgres:16-alpine
     env_file: .env
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-minerva}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-minerva}
-      POSTGRES_DB: ${POSTGRES_DB:-minerva}
+      POSTGRES_USER: ${POSTGRES_USER:-nodelinker}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nodelinker}
+      POSTGRES_DB: ${POSTGRES_DB:-nodelinker}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-minerva}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nodelinker}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -50,7 +50,7 @@ services:
     cap_add:
       - IPC_LOCK
     environment:
-      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_TOKEN:-minerva-dev-token}
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_TOKEN:-nodelinker-dev-token}
       VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
       VAULT_ADDR: "http://127.0.0.1:8200"
     healthcheck:
@@ -81,17 +81,17 @@ services:
       target: production
     env_file: .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-minerva}:${POSTGRES_PASSWORD:-minerva}@db:5432/${POSTGRES_DB:-minerva}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-nodelinker}:${POSTGRES_PASSWORD:-nodelinker}@db:5432/${POSTGRES_DB:-nodelinker}
       REDIS_URL: redis://redis:6379/0
       VAULT_URL: http://vault:8200
-      VAULT_TOKEN: ${VAULT_TOKEN:-minerva-dev-token}
+      VAULT_TOKEN: ${VAULT_TOKEN:-nodelinker-dev-token}
       VAULT_MOUNT_PATH: ${VAULT_MOUNT_PATH:-secret}
       LOG_STORAGE_TYPE: local
-      LOG_STORAGE_BASE_PATH: /var/log/minerva
+      LOG_STORAGE_BASE_PATH: /var/log/nodelinker
       DEBUG: "${DEBUG:-false}"
       CORS_ORIGINS: '["http://localhost:${HTTP_PORT:-80}"]'
     volumes:
-      - logdata:/var/log/minerva
+      - logdata:/var/log/nodelinker
     depends_on:
       db:
         condition: service_healthy
@@ -110,15 +110,15 @@ services:
       target: production
     env_file: .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-minerva}:${POSTGRES_PASSWORD:-minerva}@db:5432/${POSTGRES_DB:-minerva}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-nodelinker}:${POSTGRES_PASSWORD:-nodelinker}@db:5432/${POSTGRES_DB:-nodelinker}
       REDIS_URL: redis://redis:6379/0
       VAULT_URL: http://vault:8200
-      VAULT_TOKEN: ${VAULT_TOKEN:-minerva-dev-token}
+      VAULT_TOKEN: ${VAULT_TOKEN:-nodelinker-dev-token}
       VAULT_MOUNT_PATH: ${VAULT_MOUNT_PATH:-secret}
       LOG_STORAGE_TYPE: local
-      LOG_STORAGE_BASE_PATH: /var/log/minerva
+      LOG_STORAGE_BASE_PATH: /var/log/nodelinker
     volumes:
-      - logdata:/var/log/minerva
+      - logdata:/var/log/nodelinker
     depends_on:
       db:
         condition: service_healthy
@@ -135,10 +135,10 @@ services:
       target: production
     env_file: .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-minerva}:${POSTGRES_PASSWORD:-minerva}@db:5432/${POSTGRES_DB:-minerva}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-nodelinker}:${POSTGRES_PASSWORD:-nodelinker}@db:5432/${POSTGRES_DB:-nodelinker}
       REDIS_URL: redis://redis:6379/0
       VAULT_URL: http://vault:8200
-      VAULT_TOKEN: ${VAULT_TOKEN:-minerva-dev-token}
+      VAULT_TOKEN: ${VAULT_TOKEN:-nodelinker-dev-token}
       VAULT_MOUNT_PATH: ${VAULT_MOUNT_PATH:-secret}
     depends_on:
       db:
@@ -165,5 +165,8 @@ services:
 
 volumes:
   pgdata:
+    name: project_minerva_pgdata
   redisdata:
+    name: project_minerva_redisdata
   logdata:
+    name: project_minerva_logdata

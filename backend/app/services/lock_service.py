@@ -1,5 +1,5 @@
 """
-Redis distributed lock service for Minerva mutual exclusion.
+Redis distributed lock service for NodeLinker mutual exclusion.
 
 Lock key format: node:{node_id}:exclusive:{playbook_group}
 

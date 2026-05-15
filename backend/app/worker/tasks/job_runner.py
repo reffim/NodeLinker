@@ -464,7 +464,7 @@ def run_job(
             rc: int | None = None
             success = False
 
-            with tempfile.TemporaryDirectory(prefix="minerva_job_") as tmpdir:
+            with tempfile.TemporaryDirectory(prefix="nodelinker_job_") as tmpdir:
                 try:
                     await _build_inventory(node, credential_data, tmpdir)
                     playbook_name = _write_playbook(playbook.content, tmpdir)

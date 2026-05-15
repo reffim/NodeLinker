@@ -1,4 +1,4 @@
-# Minerva – Deployment Guide
+# NodeLinker – Deployment Guide
 
 ## Architecture
 
@@ -35,7 +35,7 @@ The backend, database, and Redis are **not** exposed to the host.
 ```bash
 # 1. Clone the repository
 git clone <repo-url>
-cd project_minerva
+cd project_nodelinker
 
 # 2. Configure environment
 cp .env.example .env
@@ -83,9 +83,9 @@ npm run dev   # Vite dev server on http://localhost:5173
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `POSTGRES_USER` | | `minerva` | DB username |
+| `POSTGRES_USER` | | `nodelinker` | DB username |
 | `POSTGRES_PASSWORD` | **Yes** | — | DB password |
-| `POSTGRES_DB` | | `minerva` | DB name |
+| `POSTGRES_DB` | | `nodelinker` | DB name |
 | `DEBUG` | | `false` | Enable debug mode (never true in prod) |
 | `HTTP_PORT` | | `80` | Host port Nginx listens on |
 | `JWT_SECRET_KEY` | **Yes** | — | Secret for signing JWTs |
@@ -149,7 +149,7 @@ docker compose logs -f nginx
 docker compose exec backend bash
 
 # Run a database shell
-docker compose exec db psql -U minerva minerva
+docker compose exec db psql -U nodelinker nodelinker
 
 # Scale Celery workers
 docker compose up -d --scale celery-worker=3

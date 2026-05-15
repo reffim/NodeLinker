@@ -1,5 +1,5 @@
 """
-HashiCorp Vault integration for Minerva.
+HashiCorp Vault integration for NodeLinker.
 
 Used exclusively for storing and retrieving Ansible SSH credentials
 (SSH private keys, passwords, etc.). The `credentials` table in

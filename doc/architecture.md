@@ -1,8 +1,8 @@
-# Minerva Architecture Design
+# NodeLinker Architecture Design
 
 ## Overview
 
-Minerva는 Ansible Automation Platform(AWX/Tower)의 역할을 수행하면서, devtron과 유사한 노드 모니터링 UI를 제공하는 웹 기반 인프라 자동화 플랫폼이다.
+NodeLinker는 Ansible Automation Platform(AWX/Tower)의 역할을 수행하면서, devtron과 유사한 노드 모니터링 UI를 제공하는 웹 기반 인프라 자동화 플랫폼이다.
 
 ---
 
@@ -121,7 +121,7 @@ ansible-runner writes stdout to artifact files. A file-tail watcher (Python `asy
 ### 4. Playbook Storage (Requirement 2)
 Two options supported:
 - **Local FS**: Playbooks stored under a managed directory, edited in-browser (Monaco editor)
-- **Git-backed**: Optional Git repo URL; Minerva clones/pulls on sync
+- **Git-backed**: Optional Git repo URL; NodeLinker clones/pulls on sync
 
 ### 5. OIDC Integration (Requirement 6)
 Auth service supports:
@@ -162,7 +162,7 @@ users(id, username, email, password_hash, oidc_sub, oidc_provider, role, created
 ## Directory Structure (Monorepo)
 
 ```
-minerva/
+nodelinker/
 ├── backend/
 │   ├── app/
 │   │   ├── api/          # FastAPI routers (auth, nodes, playbooks, jobs)
