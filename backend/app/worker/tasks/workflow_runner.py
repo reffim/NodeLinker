@@ -80,6 +80,10 @@ async def _update_run(
             select(WorkflowRun).where(WorkflowRun.id == run.id)
         )
         db_run = res.scalar_one()
+        # Don't overwrite a terminal status with a non-terminal one
+        if new_status == "running" and db_run.status != "pending":
+            run.status = db_run.status  # sync in-memory to current DB state
+            return
         db_run.status = new_status
         if started_at:
             db_run.started_at = started_at
@@ -214,17 +218,28 @@ async def _execute_workflow(run_id: str) -> None:
     now = datetime.now(timezone.utc)
     await _update_run(run, "running", started_at=now)
 
+    # Handle the case where _update_run detected the run was cancelled before we started
+    if run.status == "cancelled":
+        try:
+            await _publish_event(redis_client, run_id, {"type": "workflow_done", "status": "cancelled"})
+        finally:
+            try:
+                await redis_client.aclose()
+            except Exception:
+                pass
+        return
+
     step_index: dict[uuid.UUID, WorkflowStep] = {s.id: s for s in steps}
     executed: set[uuid.UUID] = set()
 
     current_step: Optional[WorkflowStep] = steps[0] if steps else None
 
-    if current_step is None:
-        await _update_run(run, "success", finished_at=datetime.now(timezone.utc))
-        await _publish_event(redis_client, run_id, {"type": "workflow_done", "status": "success"})
-        return
-
     try:
+        if current_step is None:
+            await _update_run(run, "success", finished_at=datetime.now(timezone.utc))
+            await _publish_event(redis_client, run_id, {"type": "workflow_done", "status": "success"})
+            return
+
         while current_step is not None:
             executed.add(current_step.id)
             run_step = step_map.get(current_step.id)

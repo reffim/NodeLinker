@@ -129,6 +129,8 @@ async def create_workflow(
         if step_in.on_failure_step_order is not None:
             pending_resolution.append((step, step_in.on_failure_step_order))
 
+    # Commit the workflow and steps first, then resolve FK references in a second pass
+    await db.commit()
     order_to_id = {order: s.id for order, s in order_to_step.items()}
     await _resolve_on_failure_steps(db, pending_resolution, order_to_id)
 

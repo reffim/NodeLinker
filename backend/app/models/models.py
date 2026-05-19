@@ -275,7 +275,7 @@ class WorkflowRun(Base):
     creator: Mapped[Optional["User"]] = relationship("User")
     workflow_run_steps: Mapped[list["WorkflowRunStep"]] = relationship(
         "WorkflowRunStep", back_populates="workflow_run",
-        order_by="WorkflowRunStep.workflow_step_id", cascade="all, delete-orphan"
+        cascade="all, delete-orphan"
     )
 
 
