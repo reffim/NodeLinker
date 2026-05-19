@@ -112,3 +112,8 @@ def test_workflow_create_rejects_duplicate_step_orders():
                 WorkflowStepCreate(order=0, playbook_id=pb_id),  # duplicate order
             ]
         )
+
+
+def test_workflow_ws_handler_importable():
+    from app.ws.workflow_runs import workflow_run_ws
+    assert callable(workflow_run_ws)
