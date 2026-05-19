@@ -134,3 +134,27 @@ async def test_orchestrator_step_failure_with_fallback_jumps():
         assert call_count["n"] == 2  # both steps were executed
         final_calls = [c for c in mock_update_run.call_args_list if "success" in c.args]
         assert len(final_calls) >= 1
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_empty_steps_succeeds():
+    """A workflow with no steps immediately marks run as success."""
+    from app.worker.tasks.workflow_runner import _execute_workflow
+
+    run = _make_run()
+
+    with patch("app.worker.tasks.workflow_runner._load_run_context") as mock_ctx, \
+         patch("app.worker.tasks.workflow_runner._update_run") as mock_update_run, \
+         patch("app.worker.tasks.workflow_runner._publish_event") as mock_pub:
+
+        mock_ctx.return_value = (run, [], {})  # empty steps
+
+        await _execute_workflow(str(run.id))
+
+        # Should mark as running then success
+        statuses_called = [c.args[1] for c in mock_update_run.call_args_list]
+        assert "running" in statuses_called
+        assert "success" in statuses_called
+        # workflow_done event should be published
+        event_types = [c.args[2].get("type") for c in mock_pub.call_args_list]
+        assert "workflow_done" in event_types

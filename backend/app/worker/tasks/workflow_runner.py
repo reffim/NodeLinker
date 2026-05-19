@@ -20,11 +20,11 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import redis.asyncio as aioredis
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
@@ -143,8 +143,6 @@ async def _create_job_for_step(
 async def _poll_until_done(
     run: WorkflowRun,
     job: Job,
-    redis_client: aioredis.Redis,
-    run_id_str: str,
 ) -> str:
     """Poll DB every POLL_INTERVAL seconds until job reaches a terminal state.
 
@@ -160,7 +158,10 @@ async def _poll_until_done(
                 select(WorkflowRun).where(WorkflowRun.id == run.id)
             )
             db_run = run_res.scalar_one_or_none()
-            if db_run and db_run.status == "cancelled":
+            if db_run is None:
+                logger.error("poll: WorkflowRun %s not found — aborting poll", run.id)
+                return "failed"
+            if db_run.status == "cancelled":
                 job_res = await session.execute(select(Job).where(Job.id == job.id))
                 db_job = job_res.scalar_one_or_none()
                 if db_job and db_job.status in ("pending", "running"):
@@ -170,7 +171,10 @@ async def _poll_until_done(
 
             job_res = await session.execute(select(Job).where(Job.id == job.id))
             db_job = job_res.scalar_one_or_none()
-            if db_job and db_job.status in ("success", "failed", "cancelled"):
+            if db_job is None:
+                logger.error("poll: Job %s not found — aborting poll", job.id)
+                return "failed"
+            if db_job.status in ("success", "failed", "cancelled"):
                 return db_job.status
 
 
@@ -215,6 +219,11 @@ async def _execute_workflow(run_id: str) -> None:
 
     current_step: Optional[WorkflowStep] = steps[0] if steps else None
 
+    if current_step is None:
+        await _update_run(run, "success", finished_at=datetime.now(timezone.utc))
+        await _publish_event(redis_client, run_id, {"type": "workflow_done", "status": "success"})
+        return
+
     try:
         while current_step is not None:
             executed.add(current_step.id)
@@ -233,7 +242,7 @@ async def _execute_workflow(run_id: str) -> None:
                 "order": current_step.order,
             })
 
-            terminal_status = await _poll_until_done(run, job, redis_client, run_id)
+            terminal_status = await _poll_until_done(run, job)
             step_done = datetime.now(timezone.utc)
 
             if terminal_status == "cancelled":
@@ -271,7 +280,17 @@ async def _execute_workflow(run_id: str) -> None:
                     "type": "step_finished", "step_id": str(current_step.id), "status": "failed",
                 })
                 if current_step.on_failure_step_id:
-                    current_step = step_index.get(current_step.on_failure_step_id)
+                    fallback = step_index.get(current_step.on_failure_step_id)
+                    if fallback is not None:
+                        current_step = fallback
+                    else:
+                        logger.error(
+                            "run=%s step=%s on_failure_step_id=%s not found in workflow steps — failing run",
+                            run_id, current_step.id, current_step.on_failure_step_id,
+                        )
+                        await _update_run(run, "failed", finished_at=step_done)
+                        await _publish_event(redis_client, run_id, {"type": "workflow_done", "status": "failed"})
+                        current_step = None
                 else:
                     await _update_run(run, "failed", finished_at=step_done)
                     await _publish_event(redis_client, run_id, {
@@ -295,20 +314,35 @@ async def _execute_workflow(run_id: str) -> None:
 def run_workflow(workflow_run_id: str) -> dict:
     """Orchestrate a WorkflowRun by sequentially dispatching per-step Jobs."""
     logger.info("run_workflow: run=%s", workflow_run_id)
-    try:
-        asyncio.run(_execute_workflow(workflow_run_id))
-        return {"status": "done", "run_id": workflow_run_id}
-    except Exception as exc:
-        logger.exception("run_workflow: unhandled error run=%s: %s", workflow_run_id, exc)
-        return {"status": "error", "error": str(exc)}
+
+    async def _run() -> dict:
+        try:
+            await _execute_workflow(workflow_run_id)
+            return {"status": "done", "run_id": workflow_run_id}
+        except Exception as exc:
+            logger.exception("run_workflow: unhandled error run=%s: %s", workflow_run_id, exc)
+            # Best-effort: mark the run as failed so it doesn't stay stuck in "running"
+            try:
+                async with async_session_factory() as session:
+                    res = await session.execute(
+                        select(WorkflowRun).where(WorkflowRun.id == uuid.UUID(workflow_run_id))
+                    )
+                    db_run = res.scalar_one_or_none()
+                    if db_run and db_run.status == "running":
+                        db_run.status = "failed"
+                        db_run.finished_at = datetime.now(timezone.utc)
+                        await session.commit()
+            except Exception:
+                logger.exception("run_workflow: failed to mark run as failed run=%s", workflow_run_id)
+            return {"status": "error", "error": str(exc)}
+
+    return asyncio.run(_run())
 
 
 @celery_app.task(name="app.worker.tasks.workflow_runner.sweep_stale_runs", bind=False)
 def sweep_stale_runs() -> dict:
     """Mark workflow runs stuck in 'running' for over STALE_RUN_THRESHOLD_MINUTES as failed."""
     async def _sweep() -> int:
-        from datetime import timedelta
-        from sqlalchemy import and_
         threshold = datetime.now(timezone.utc) - timedelta(minutes=STALE_RUN_THRESHOLD_MINUTES)
         async with async_session_factory() as session:
             res = await session.execute(
