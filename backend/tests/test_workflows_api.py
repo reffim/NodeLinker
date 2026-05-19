@@ -1,3 +1,8 @@
+import pytest
+from unittest.mock import AsyncMock, MagicMock
+import uuid
+
+
 def test_workflow_models_importable():
     from app.models.models import Workflow, WorkflowStep, WorkflowRun, WorkflowRunStep
     assert Workflow.__tablename__ == "workflows"
@@ -34,14 +39,8 @@ def test_workflow_create_validates_steps():
 
 def test_workflow_run_create_requires_node_ids():
     from app.schemas.workflows import WorkflowRunCreate
-    import pytest as pt
-    with pt.raises(Exception):
+    with pytest.raises(Exception):
         WorkflowRunCreate(node_ids=[])
-
-
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-import uuid
 
 
 def _make_db_result(obj):
@@ -83,3 +82,33 @@ async def test_create_workflow_resolves_on_failure_step():
 
     assert step_b.on_failure_step_id == step_a.id
     db.commit.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_resolve_on_failure_step_raises_422_for_invalid_order():
+    """_resolve_on_failure_steps raises 422 when order reference doesn't exist."""
+    from app.api.v1.workflows import _resolve_on_failure_steps
+    from fastapi import HTTPException
+
+    step = MagicMock()
+    db = AsyncMock()
+
+    order_to_id = {0: uuid.uuid4()}  # only order 0 exists
+    pending = [(step, 99)]  # references order 99 which doesn't exist
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_on_failure_steps(db, pending, order_to_id)
+    assert exc_info.value.status_code == 422
+
+
+def test_workflow_create_rejects_duplicate_step_orders():
+    from app.schemas.workflows import WorkflowCreate, WorkflowStepCreate
+    pb_id = uuid.uuid4()
+    with pytest.raises(Exception):
+        WorkflowCreate(
+            name="Bad Pipeline",
+            steps=[
+                WorkflowStepCreate(order=0, playbook_id=pb_id),
+                WorkflowStepCreate(order=0, playbook_id=pb_id),  # duplicate order
+            ]
+        )

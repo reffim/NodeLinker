@@ -13,7 +13,6 @@ Routes:
   POST   /api/v1/workflow-runs/{run_id}/cancel
 """
 import uuid
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -74,7 +73,8 @@ async def _resolve_on_failure_steps(
                 detail=f"on_failure_step_order {target_order} does not match any step order in this workflow",
             )
         step.on_failure_step_id = order_to_id[target_order]
-    await db.commit()
+    if pending:
+        await db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -276,7 +276,6 @@ async def cancel_workflow_run(
         raise HTTPException(status_code=409, detail=f"Cannot cancel run in status '{run.status}'")
     run.status = "cancelled"
     await db.commit()
-    await db.refresh(run)
     result = await db.execute(
         select(WorkflowRun).where(WorkflowRun.id == run_id).options(WORKFLOW_RUN_STEPS_OPTION)
     )

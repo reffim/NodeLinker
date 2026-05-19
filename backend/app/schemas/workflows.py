@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class WorkflowStepCreate(BaseModel):
@@ -18,6 +18,13 @@ class WorkflowCreate(BaseModel):
     name: str = Field(..., max_length=255)
     description: Optional[str] = None
     steps: list[WorkflowStepCreate] = Field(..., min_length=1)
+
+    @model_validator(mode="after")
+    def check_unique_step_orders(self) -> "WorkflowCreate":
+        orders = [s.order for s in self.steps]
+        if len(orders) != len(set(orders)):
+            raise ValueError("step order values must be unique within a workflow")
+        return self
 
 
 class WorkflowUpdate(BaseModel):
