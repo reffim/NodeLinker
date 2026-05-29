@@ -66,6 +66,7 @@ export default function WorkflowRunMonitor() {
   )
 
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null)
+  const [cancelError, setCancelError] = useState<string | null>(null)
 
   // Auto-select the running step; fall back to first step after data loads
   useEffect(() => {
@@ -75,7 +76,7 @@ export default function WorkflowRunMonitor() {
     } else if (!selectedStepId && steps.length > 0) {
       setSelectedStepId(steps[0].id)
     }
-  }, [steps])
+  }, [steps, selectedStepId])
 
   const cancelMutation = useMutation({
     mutationFn: () => cancelWorkflowRun(runId!),
@@ -83,6 +84,7 @@ export default function WorkflowRunMonitor() {
       queryClient.invalidateQueries({ queryKey: ['workflow-run', runId] })
       queryClient.invalidateQueries({ queryKey: ['workflow-runs'] })
     },
+    onError: () => setCancelError('Failed to cancel run. Please try again.'),
   })
 
   const playbookMap = new Map(playbooks.map((pb) => [pb.id, pb]))
@@ -118,6 +120,9 @@ export default function WorkflowRunMonitor() {
             >
               {cancelMutation.isPending ? 'Cancelling…' : 'Cancel Run'}
             </Button>
+          )}
+          {cancelError && (
+            <p className="text-xs text-destructive">{cancelError}</p>
           )}
           {done && (
             <p className="text-xs text-muted-foreground">Run complete.</p>

@@ -11,7 +11,7 @@ export function useWorkflowRunWS(
 ) {
   const [steps, setSteps] = useState<WorkflowRunStep[]>(initialSteps)
   const [runStatus, setRunStatus] = useState<string | null>(initialRunStatus ?? null)
-  const [done, setDone] = useState(false)
+  const [done, setDone] = useState(() => TERMINAL.has(initialRunStatus ?? ''))
   const [disconnected, setDisconnected] = useState(false)
   const queryClient = useQueryClient()
   const initializedRef = useRef(false)

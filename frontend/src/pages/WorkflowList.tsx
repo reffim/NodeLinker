@@ -54,13 +54,11 @@ function NewWorkflowModal({ onClose }: { onClose: () => void }) {
   function removeStep(i: number) {
     setSteps((prev) => {
       const next = prev.filter((_, idx) => idx !== i)
-      return next.map((s) => ({
-        ...s,
-        onFailureIdx:
-          s.onFailureIdx === i || (s.onFailureIdx !== '' && s.onFailureIdx >= next.length)
-            ? ''
-            : s.onFailureIdx,
-      }))
+      return next.map((s) => {
+        if (s.onFailureIdx === '' || s.onFailureIdx === i) return { ...s, onFailureIdx: '' }
+        if (s.onFailureIdx > i) return { ...s, onFailureIdx: s.onFailureIdx - 1 }
+        return s
+      })
     })
   }
 
@@ -319,6 +317,7 @@ export default function WorkflowList() {
 
   const [showNewModal, setShowNewModal] = useState(false)
   const [showRunModal, setShowRunModal] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   const { data: workflows = [], isLoading } = useQuery({
     queryKey: ['workflows'],
@@ -352,6 +351,7 @@ export default function WorkflowList() {
       queryClient.invalidateQueries({ queryKey: ['workflows'] })
       navigate('/workflows')
     },
+    onError: () => setDeleteError('Failed to delete workflow. Please try again.'),
   })
 
   const playbookMap = new Map(playbooks.map((pb) => [pb.id, pb]))
@@ -362,6 +362,7 @@ export default function WorkflowList() {
   function handleDelete() {
     if (!workflowId || !confirm(`Delete "${selectedWorkflow?.name}"? This cannot be undone.`))
       return
+    setDeleteError(null)
     deleteMutation.mutate(workflowId)
   }
 
@@ -439,6 +440,9 @@ export default function WorkflowList() {
                   </Button>
                 )}
               </div>
+              {deleteError && (
+                <p className="text-sm text-destructive mt-2">{deleteError}</p>
+              )}
             </div>
 
             {/* Steps */}
