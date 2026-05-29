@@ -110,3 +110,58 @@ export interface JobLog {
   content: string
   created_at: string
 }
+
+export interface WorkflowStep {
+  id: string
+  workflow_id: string
+  order: number
+  playbook_id: string
+  on_failure_step_id: string | null
+}
+
+export interface Workflow {
+  id: string
+  name: string
+  description: string | null
+  created_at: string
+  updated_at: string
+  steps: WorkflowStep[]
+}
+
+export interface WorkflowCreate {
+  name: string
+  description?: string
+  steps: {
+    order: number
+    playbook_id: string
+    on_failure_step_order: number | null
+  }[]
+}
+
+export interface WorkflowRunStep {
+  id: string
+  workflow_run_id: string
+  workflow_step_id: string
+  job_id: string | null
+  status: 'pending' | 'running' | 'success' | 'failed' | 'skipped'
+  started_at: string | null
+  finished_at: string | null
+}
+
+export interface WorkflowRun {
+  id: string
+  workflow_id: string
+  status: 'pending' | 'running' | 'success' | 'failed' | 'cancelled'
+  created_by: string | null
+  node_ids: string[]
+  extra_vars: Record<string, unknown> | null
+  started_at: string | null
+  finished_at: string | null
+  created_at: string
+  workflow_run_steps: WorkflowRunStep[]
+}
+
+export interface WorkflowRunCreate {
+  node_ids: string[]
+  extra_vars?: Record<string, unknown>
+}
