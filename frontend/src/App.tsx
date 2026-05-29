@@ -7,6 +7,8 @@ import NodeDashboard from '@/pages/NodeDashboard'
 import PlaybookEditor from '@/pages/PlaybookEditor'
 import ExclusiveGroups from '@/pages/ExclusiveGroups'
 import JobMonitor from '@/pages/JobMonitor'
+import WorkflowList from '@/pages/WorkflowList'
+import WorkflowRunMonitor from '@/pages/WorkflowRunMonitor'
 
 export default function App() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
@@ -32,6 +34,9 @@ export default function App() {
           <Route path="groups" element={<ExclusiveGroups />} />
           <Route path="jobs" element={<JobMonitor />} />
           <Route path="jobs/:jobId" element={<JobMonitor />} />
+          <Route path="workflows" element={<WorkflowList />} />
+          <Route path="workflows/:workflowId" element={<WorkflowList />} />
+          <Route path="workflow-runs/:runId" element={<WorkflowRunMonitor />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

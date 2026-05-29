@@ -1,5 +1,5 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
-import { Server, BookOpen, Activity, LogOut, Lock } from 'lucide-react'
+import { Server, BookOpen, Activity, LogOut, Lock, GitBranch } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth'
 import { logout } from '@/api/auth'
@@ -9,6 +9,7 @@ const navItems = [
   { to: '/playbooks', label: 'Playbooks', icon: BookOpen },
   { to: '/groups', label: 'Groups', icon: Lock },
   { to: '/jobs', label: 'Jobs', icon: Activity },
+  { to: '/workflows', label: 'Workflows', icon: GitBranch },
 ]
 
 export default function Layout() {
