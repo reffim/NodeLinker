@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { getJob, getJobNodeLogsContent } from '@/api/jobs'
+import { getJob } from '@/api/jobs'
 import { getPlaybook } from '@/api/playbooks'
 import { listNodes } from '@/api/nodes'
-import { useJobLogsWS } from '@/hooks/useJobLogsWS'
+import { useJobLogsPoll } from '@/hooks/useJobLogsPoll'
 import { Badge } from '@/components/ui/badge'
 import type { Job } from '@/types'
 
@@ -19,12 +19,18 @@ function jobStatusVariant(
   }
 }
 
+const TERMINAL_STATUSES = new Set(['success', 'failed', 'cancelled'])
+
 export function LogPanel({ jobId }: { jobId: string }) {
-  const { lines, done, finalStatus } = useJobLogsWS(jobId)
+  const { lines } = useJobLogsPoll(jobId)
   const { data: job } = useQuery({
     queryKey: ['job', jobId],
     queryFn: () => getJob(jobId),
     enabled: !!jobId,
+    refetchInterval: (query) => {
+      const s = query.state.data?.status
+      return !s || !TERMINAL_STATUSES.has(s) ? 2000 : false
+    },
   })
   const { data: playbook } = useQuery({
     queryKey: ['playbook', job?.playbook_id],
@@ -36,38 +42,10 @@ export function LogPanel({ jobId }: { jobId: string }) {
     queryFn: () => listNodes(),
   })
   const endRef = useRef<HTMLDivElement>(null)
-  const [staticLines, setStaticLines] = useState<{ node_id: string; content: string }[]>([])
-  const [loadingStatic, setLoadingStatic] = useState(false)
-  const [staticLoaded, setStaticLoaded] = useState(false)
-
-  useEffect(() => {
-    if (job && (job.status === 'success' || job.status === 'failed' || job.status === 'cancelled')) {
-      if (lines.length === 0 && !staticLoaded && !loadingStatic) {
-        setLoadingStatic(true)
-        const fetchAllLogs = async () => {
-          let allLines: { node_id: string; content: string }[] = []
-          for (const node of job.job_nodes) {
-            try {
-              const contents = await getJobNodeLogsContent(jobId, node.node_id)
-              allLines = allLines.concat(contents.map((c) => ({ node_id: node.node_id, content: c })))
-            } catch (e) {
-              allLines.push({ node_id: node.node_id, content: `Failed to load logs: ${e}` })
-            }
-          }
-          setStaticLines(allLines)
-          setLoadingStatic(false)
-          setStaticLoaded(true)
-        }
-        fetchAllLogs()
-      }
-    }
-  }, [job?.status, lines.length, jobId, staticLoaded, loadingStatic])
-
-  const displayLines = lines.length > 0 ? lines : staticLines
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [displayLines])
+  }, [lines])
 
   return (
     <div className="flex flex-col h-full">
@@ -76,9 +54,6 @@ export function LogPanel({ jobId }: { jobId: string }) {
           {playbook ? playbook.name : 'Job Logs'}
         </span>
         {job && <Badge variant={jobStatusVariant(job.status)}>{job.status}</Badge>}
-        {done && finalStatus && (
-          <span className="text-xs text-muted-foreground ml-auto">Completed: {finalStatus}</span>
-        )}
       </div>
 
       {job && job.job_nodes.length > 0 && (
@@ -115,13 +90,10 @@ export function LogPanel({ jobId }: { jobId: string }) {
       )}
 
       <div className="flex-1 overflow-y-auto bg-gray-950 text-gray-100 font-mono text-xs p-4 space-y-0.5">
-        {displayLines.length === 0 && !done && !loadingStatic && (
+        {lines.length === 0 && (
           <p className="text-gray-500">Waiting for output…</p>
         )}
-        {displayLines.length === 0 && loadingStatic && (
-          <p className="text-gray-500">Loading archived logs…</p>
-        )}
-        {displayLines.map((line, i) => (
+        {lines.map((line, i) => (
           <div key={i} className="leading-5">
             {line.node_id && (
               <span className="text-gray-500 mr-2">[{line.node_id.slice(0, 8)}]</span>
