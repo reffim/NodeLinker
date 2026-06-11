@@ -13,6 +13,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+import sqlalchemy as sa
 
 from app.db.session import Base
 
@@ -172,9 +173,6 @@ class Job(Base):
 
 # ---------------------------------------------------------------------------
 # Job-Node mapping
-# log_file_url: points to Object Storage (S3) or Local FS path where the
-# compressed log archive is stored after the job completes.
-# Real-time streaming is done via Redis pub/sub; this is the persistent record.
 # ---------------------------------------------------------------------------
 class JobNode(Base):
     __tablename__ = "job_nodes"
@@ -191,10 +189,33 @@ class JobNode(Base):
         default="pending",
     )
     exit_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    log_file_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
 
     job: Mapped["Job"] = relationship("Job", back_populates="job_nodes")
     node: Mapped[Optional["Node"]] = relationship("Node", back_populates="job_nodes")
+
+
+# ---------------------------------------------------------------------------
+# Job log chunks
+# Logs are buffered in memory during job execution and flushed every 1.5 s
+# as a single row. The frontend polls GET /jobs/{id}/logs/chunks?after={id}.
+# ---------------------------------------------------------------------------
+class JobLogChunk(Base):
+    __tablename__ = "job_log_chunks"
+
+    id: Mapped[int] = mapped_column(
+        sa.BigInteger, primary_key=True, autoincrement=True
+    )
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False
+    )
+    node_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("nodes.id", ondelete="CASCADE"), nullable=False
+    )
+    chunk_seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +315,9 @@ class WorkflowRunStep(Base):
     job_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True
     )
+    node_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("nodes.id", ondelete="SET NULL"), nullable=True
+    )
     status: Mapped[str] = mapped_column(
         Enum("pending", "running", "success", "failed", "skipped", name="workflow_run_step_status"),
         nullable=False,
@@ -305,3 +329,4 @@ class WorkflowRunStep(Base):
     workflow_run: Mapped["WorkflowRun"] = relationship("WorkflowRun", back_populates="workflow_run_steps")
     workflow_step: Mapped["WorkflowStep"] = relationship("WorkflowStep")
     job: Mapped[Optional["Job"]] = relationship("Job")
+    node: Mapped[Optional["Node"]] = relationship("Node")
