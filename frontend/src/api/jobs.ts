@@ -1,5 +1,5 @@
 import client from "./client"
-import type { Job, JobCreate, JobLog } from "../types"
+import type { Job, JobCreate, JobLogChunk } from "../types"
 
 export interface ListJobsParams {
   job_status?: string
@@ -23,13 +23,10 @@ export async function createJob(payload: JobCreate): Promise<Job> {
   return data
 }
 
-export async function getJobLogs(id: string): Promise<JobLog[]> {
-  const { data } = await client.get<JobLog[]>(`/jobs/${id}/logs`)
-  return data
-}
-
-export async function getJobNodeLogsContent(jobId: string, nodeId: string): Promise<string[]> {
-  const { data } = await client.get<string[]>(`/jobs/${jobId}/nodes/${nodeId}/logs/content`)
+export async function getJobLogChunks(jobId: string, after: number): Promise<JobLogChunk[]> {
+  const { data } = await client.get<JobLogChunk[]>(`/jobs/${jobId}/logs/chunks`, {
+    params: { after },
+  })
   return data
 }
 

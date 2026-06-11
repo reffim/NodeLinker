@@ -102,11 +102,11 @@ export interface JobCreate {
   extra_vars?: Record<string, unknown>
 }
 
-export interface JobLog {
+export interface JobLogChunk {
   id: number
   job_id: string
-  node_id: string | null
-  line_number: number
+  node_id: string
+  chunk_seq: number
   content: string
   created_at: string
 }
@@ -143,6 +143,7 @@ export interface WorkflowRunStep {
   workflow_run_id: string
   workflow_step_id: string
   job_id: string | null
+  node_id: string | null
   status: 'pending' | 'running' | 'success' | 'failed' | 'skipped'
   started_at: string | null
   finished_at: string | null
