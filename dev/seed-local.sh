@@ -155,9 +155,29 @@ NODE_RESP=$(curl -s -b "$COOKIE_JAR" \
 NODE_ID=$(echo "$NODE_RESP" | jq -r '.id // empty' 2>/dev/null)
 
 if [ -z "$NODE_ID" ]; then
-  echo "  → Node may already exist or creation failed. Response: ${NODE_RESP}"
+  echo "  → test-node-01 may already exist or creation failed. Response: ${NODE_RESP}"
 else
-  echo "  → Node registered. ID: ${NODE_ID}"
+  echo "  → test-node-01 registered. ID: ${NODE_ID}"
+fi
+
+NODE2_RESP=$(curl -s -b "$COOKIE_JAR" \
+  -X POST "${API_URL}/nodes" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"name\": \"test-node-02\",
+    \"host\": \"test-node-2\",
+    \"port\": 22,
+    \"ssh_user\": \"testuser\",
+    \"credential_id\": \"${CRED_ID}\",
+    \"tags\": [\"dev\", \"test\"]
+  }")
+
+NODE2_ID=$(echo "$NODE2_RESP" | jq -r '.id // empty' 2>/dev/null)
+
+if [ -z "$NODE2_ID" ]; then
+  echo "  → test-node-02 may already exist or creation failed. Response: ${NODE2_RESP}"
+else
+  echo "  → test-node-02 registered. ID: ${NODE2_ID}"
 fi
 
 echo ""

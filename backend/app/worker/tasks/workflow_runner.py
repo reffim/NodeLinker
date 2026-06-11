@@ -4,15 +4,13 @@ Celery task: orchestrate a multi-step workflow run.
 One `run_workflow` task drives the entire WorkflowRun sequentially:
   1. Mark the run as "running"
   2. For each step (ordered by `order` ASC):
-     a. Create a Job + JobNodes and dispatch per-node run_job tasks
-     b. Update the pre-created WorkflowRunStep to "running"
-     c. Publish step_started event to Redis
-     d. Poll DB every 5s until Job reaches a terminal state
-     e. On cancel: cancel current job, mark run cancelled, exit
-     f. On success: update run_step to success, continue to next step
-     g. On failure: update run_step to failed
-        - if on_failure_step_id set: jump to that step
-        - else: mark run failed, exit
+     a. For each node: create a Job (1 node) + dispatch run_job
+     b. Update the pre-created WorkflowRunStep (per node) to "running"
+     c. Publish step_started event per node to Redis
+     d. Poll DB in parallel until all per-node Jobs reach a terminal state
+     e. On cancel: mark all node steps failed, mark run cancelled, exit
+     f. On all success: update node steps to success, continue to next step
+     g. On any failure: update node steps, check on_failure_step_id or fail run
   3. Mark remaining pending run_steps as "skipped" on failure/cancel exit
   4. Publish workflow_done event to Redis
 """
@@ -45,7 +43,7 @@ STALE_RUN_THRESHOLD_MINUTES = 60
 
 async def _load_run_context(
     run_id: str,
-) -> tuple[WorkflowRun, list[WorkflowStep], dict[uuid.UUID, WorkflowRunStep]]:
+) -> tuple[WorkflowRun, list[WorkflowStep], dict[uuid.UUID, list[WorkflowRunStep]]]:
     async with async_session_factory() as session:
         run_res = await session.execute(
             select(WorkflowRun)
@@ -63,9 +61,10 @@ async def _load_run_context(
         )
         steps = list(steps_res.scalars().all())
 
-        step_map: dict[uuid.UUID, WorkflowRunStep] = {
-            rs.workflow_step_id: rs for rs in run.workflow_run_steps
-        }
+        step_map: dict[uuid.UUID, list[WorkflowRunStep]] = {}
+        for rs in run.workflow_run_steps:
+            step_map.setdefault(rs.workflow_step_id, []).append(rs)
+
         return run, steps, step_map
 
 
@@ -115,9 +114,10 @@ async def _update_run_step(
         await session.commit()
 
 
-async def _create_job_for_step(
+async def _create_job_for_node(
     run: WorkflowRun,
     step: WorkflowStep,
+    node_id: uuid.UUID,
 ) -> Job:
     async with async_session_factory() as session:
         job = Job(
@@ -127,19 +127,17 @@ async def _create_job_for_step(
         )
         session.add(job)
         await session.flush()
-        for node_id in run.node_ids:
-            session.add(JobNode(job_id=job.id, node_id=node_id, status="pending"))
+        session.add(JobNode(job_id=job.id, node_id=node_id, status="pending"))
         await session.commit()
         await session.refresh(job)
 
     from app.worker.tasks.job_runner import run_job
-    for node_id in run.node_ids:
-        run_job.delay(
-            job_id=str(job.id),
-            playbook_id=str(step.playbook_id),
-            node_id=str(node_id),
-            extra_vars=run.extra_vars or {},
-        )
+    run_job.delay(
+        job_id=str(job.id),
+        playbook_id=str(step.playbook_id),
+        node_id=str(node_id),
+        extra_vars=run.extra_vars or {},
+    )
 
     return job
 
@@ -191,12 +189,14 @@ async def _publish_event(redis_client: aioredis.Redis, run_id: str, event: dict)
 
 
 async def _mark_remaining_skipped(
-    step_map: dict[uuid.UUID, WorkflowRunStep],
+    step_map: dict[uuid.UUID, list[WorkflowRunStep]],
     executed_step_ids: set[uuid.UUID],
 ) -> None:
     pending_ids = [
-        rs.id for step_id, rs in step_map.items()
+        rs.id
+        for step_id, run_steps in step_map.items()
         if step_id not in executed_step_ids
+        for rs in run_steps
     ]
     if not pending_ids:
         return
@@ -242,58 +242,75 @@ async def _execute_workflow(run_id: str) -> None:
 
         while current_step is not None:
             executed.add(current_step.id)
-            run_step = step_map.get(current_step.id)
-
-            job = await _create_job_for_step(run, current_step)
-
+            run_steps = step_map.get(current_step.id, [])
             step_now = datetime.now(timezone.utc)
-            if run_step:
-                await _update_run_step(run_step, "running", job_id=job.id, started_at=step_now)
 
-            await _publish_event(redis_client, run_id, {
-                "type": "step_started",
-                "step_id": str(current_step.id),
-                "job_id": str(job.id),
-                "order": current_step.order,
-            })
+            # Create one job per node and publish step_started events
+            node_job_pairs: list[tuple[Job, WorkflowRunStep]] = []
+            for rs in run_steps:
+                if rs.node_id is None:
+                    logger.warning(
+                        "run=%s step=%s run_step=%s has no node_id — skipping",
+                        run_id, current_step.id, rs.id,
+                    )
+                    continue
+                job = await _create_job_for_node(run, current_step, rs.node_id)
+                await _update_run_step(rs, "running", job_id=job.id, started_at=step_now)
+                await _publish_event(redis_client, run_id, {
+                    "type": "step_started",
+                    "step_id": str(rs.id),
+                    "job_id": str(job.id),
+                    "order": current_step.order,
+                    "node_id": str(rs.node_id),
+                })
+                node_job_pairs.append((job, rs))
 
-            terminal_status = await _poll_until_done(run, job)
+            # Poll all node jobs in parallel
+            poll_results: list[str] = list(await asyncio.gather(
+                *[_poll_until_done(run, job) for job, _ in node_job_pairs]
+            ))
             step_done = datetime.now(timezone.utc)
 
-            if terminal_status == "cancelled":
-                if run_step:
-                    await _update_run_step(run_step, "failed", finished_at=step_done)
-                await _publish_event(redis_client, run_id, {
-                    "type": "step_finished", "step_id": str(current_step.id), "status": "failed",
-                })
+            if "cancelled" in poll_results:
+                for _, rs in node_job_pairs:
+                    await _update_run_step(rs, "failed", finished_at=step_done)
+                    await _publish_event(redis_client, run_id, {
+                        "type": "step_finished",
+                        "step_id": str(rs.id),
+                        "status": "failed",
+                        "node_id": str(rs.node_id),
+                    })
                 await _update_run(run, "cancelled", finished_at=step_done)
-                await _publish_event(redis_client, run_id, {
-                    "type": "workflow_done", "status": "cancelled",
-                })
+                await _publish_event(redis_client, run_id, {"type": "workflow_done", "status": "cancelled"})
                 current_step = None
 
-            elif terminal_status == "success":
-                if run_step:
-                    await _update_run_step(run_step, "success", finished_at=step_done)
-                await _publish_event(redis_client, run_id, {
-                    "type": "step_finished", "step_id": str(current_step.id), "status": "success",
-                })
+            elif all(s == "success" for s in poll_results):
+                for _, rs in node_job_pairs:
+                    await _update_run_step(rs, "success", finished_at=step_done)
+                    await _publish_event(redis_client, run_id, {
+                        "type": "step_finished",
+                        "step_id": str(rs.id),
+                        "status": "success",
+                        "node_id": str(rs.node_id),
+                    })
                 next_steps = [s for s in steps if s.order > current_step.order]
                 if next_steps:
                     current_step = min(next_steps, key=lambda s: s.order)
                 else:
                     await _update_run(run, "success", finished_at=step_done)
-                    await _publish_event(redis_client, run_id, {
-                        "type": "workflow_done", "status": "success",
-                    })
+                    await _publish_event(redis_client, run_id, {"type": "workflow_done", "status": "success"})
                     current_step = None
 
-            else:  # failed
-                if run_step:
-                    await _update_run_step(run_step, "failed", finished_at=step_done)
-                await _publish_event(redis_client, run_id, {
-                    "type": "step_finished", "step_id": str(current_step.id), "status": "failed",
-                })
+            else:  # some failed
+                for (_, rs), status in zip(node_job_pairs, poll_results):
+                    node_status = status if status in ("success", "failed") else "failed"
+                    await _update_run_step(rs, node_status, finished_at=step_done)
+                    await _publish_event(redis_client, run_id, {
+                        "type": "step_finished",
+                        "step_id": str(rs.id),
+                        "status": node_status,
+                        "node_id": str(rs.node_id),
+                    })
                 if current_step.on_failure_step_id:
                     fallback = step_index.get(current_step.on_failure_step_id)
                     if fallback is not None:
@@ -308,9 +325,7 @@ async def _execute_workflow(run_id: str) -> None:
                         current_step = None
                 else:
                     await _update_run(run, "failed", finished_at=step_done)
-                    await _publish_event(redis_client, run_id, {
-                        "type": "workflow_done", "status": "failed",
-                    })
+                    await _publish_event(redis_client, run_id, {"type": "workflow_done", "status": "failed"})
                     current_step = None
 
     finally:
@@ -327,7 +342,7 @@ async def _execute_workflow(run_id: str) -> None:
 
 @celery_app.task(name="app.worker.tasks.workflow_runner.run_workflow", bind=False)
 def run_workflow(workflow_run_id: str) -> dict:
-    """Orchestrate a WorkflowRun by sequentially dispatching per-step Jobs."""
+    """Orchestrate a WorkflowRun by sequentially dispatching per-node Jobs."""
     logger.info("run_workflow: run=%s", workflow_run_id)
 
     async def _run() -> dict:

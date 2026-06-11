@@ -63,6 +63,7 @@ class WorkflowRunStepResponse(BaseModel):
     workflow_run_id: uuid.UUID
     workflow_step_id: uuid.UUID
     job_id: Optional[uuid.UUID]
+    node_id: Optional[uuid.UUID]
     status: str
     started_at: Optional[datetime]
     finished_at: Optional[datetime]

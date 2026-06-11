@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { LogPanel } from '@/components/LogPanel'
 import { getWorkflowRun, cancelWorkflowRun, getWorkflow } from '@/api/workflows'
 import { listPlaybooks } from '@/api/playbooks'
+import { listNodes } from '@/api/nodes'
 import { useWorkflowRunWS } from '@/hooks/useWorkflowRunWS'
 import type { WorkflowRun, WorkflowRunStep } from '@/types'
 
@@ -42,10 +43,16 @@ export default function WorkflowRunMonitor() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
+  const TERMINAL_STATUSES = new Set(['success', 'failed', 'cancelled'])
+
   const { data: run } = useQuery({
     queryKey: ['workflow-run', runId],
     queryFn: () => getWorkflowRun(runId!),
     enabled: !!runId,
+    refetchInterval: (query) => {
+      const s = query.state.data?.status
+      return !s || !TERMINAL_STATUSES.has(s) ? 3000 : false
+    },
   })
 
   const { data: workflow } = useQuery({
@@ -59,7 +66,12 @@ export default function WorkflowRunMonitor() {
     queryFn: listPlaybooks,
   })
 
-  const { steps, runStatus, done, disconnected } = useWorkflowRunWS(
+  const { data: nodes = [] } = useQuery({
+    queryKey: ['nodes'],
+    queryFn: listNodes,
+  })
+
+  const { steps, runStatus, disconnected } = useWorkflowRunWS(
     runId,
     run?.workflow_run_steps ?? [],
     run?.status,
@@ -68,15 +80,29 @@ export default function WorkflowRunMonitor() {
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null)
   const [cancelError, setCancelError] = useState<string | null>(null)
 
-  // Auto-select the running step; fall back to first step after data loads
+  const playbookMap = new Map(playbooks.map((pb) => [pb.id, pb]))
+  const stepDefMap = new Map(workflow?.steps.map((s) => [s.id, s]) ?? [])
+  const stepOrderMap = new Map(workflow?.steps.map((s) => [s.id, s.order]) ?? [])
+  const nodeMap = new Map(nodes.map((n) => [n.id, n]))
+
+  const displayStatus = (runStatus ?? run?.status ?? 'pending') as WorkflowRun['status']
+  const isActive = displayStatus === 'pending' || displayStatus === 'running'
+
+  // Fall back to REST data when WS events were missed (run terminal but all steps still pending)
+  const wsStepsMissed =
+    run && TERMINAL_STATUSES.has(run.status) && steps.every((s) => s.status === 'pending')
+  const displaySteps = wsStepsMissed ? (run?.workflow_run_steps ?? steps) : steps
+
+  // Auto-select: running step while active; failed step (or first) once terminal
   useEffect(() => {
-    const running = steps.find((s) => s.status === 'running')
+    const running = displaySteps.find((s) => s.status === 'running')
     if (running) {
       setSelectedStepId(running.id)
-    } else if (!selectedStepId && steps.length > 0) {
-      setSelectedStepId(steps[0].id)
+    } else if (!selectedStepId && displaySteps.length > 0) {
+      const failed = displaySteps.find((s) => s.status === 'failed')
+      setSelectedStepId((failed ?? displaySteps[0]).id)
     }
-  }, [steps, selectedStepId])
+  }, [displaySteps, selectedStepId])
 
   const cancelMutation = useMutation({
     mutationFn: () => cancelWorkflowRun(runId!),
@@ -87,13 +113,7 @@ export default function WorkflowRunMonitor() {
     onError: () => setCancelError('Failed to cancel run. Please try again.'),
   })
 
-  const playbookMap = new Map(playbooks.map((pb) => [pb.id, pb]))
-  const stepDefMap = new Map(workflow?.steps.map((s) => [s.id, s]) ?? [])
-  const stepOrderMap = new Map(workflow?.steps.map((s) => [s.id, s.order]) ?? [])
-
-  const displayStatus = (runStatus ?? run?.status ?? 'pending') as WorkflowRun['status']
-  const isActive = displayStatus === 'pending' || displayStatus === 'running'
-  const selectedStep = steps.find((s) => s.id === selectedStepId) ?? null
+  const selectedStep = displaySteps.find((s) => s.id === selectedStepId) ?? null
 
   return (
     <div className="flex h-full">
@@ -124,10 +144,20 @@ export default function WorkflowRunMonitor() {
           {cancelError && (
             <p className="text-xs text-destructive">{cancelError}</p>
           )}
-          {done && (
-            <p className="text-xs text-muted-foreground">Run complete.</p>
-          )}
         </div>
+
+        {displayStatus === 'failed' && (() => {
+          const failedRunStep = displaySteps.find((s) => s.status === 'failed')
+          if (!failedRunStep) return null
+          const stepDef = stepDefMap.get(failedRunStep.workflow_step_id)
+          const pb = stepDef ? playbookMap.get(stepDef.playbook_id) : undefined
+          const order = stepDef?.order ?? '?'
+          return (
+            <div className="px-4 py-2 bg-destructive/10 border-b border-destructive/20 text-xs text-destructive">
+              Step {order} failed: {pb?.name ?? 'Unknown playbook'} — see logs below
+            </div>
+          )
+        })()}
 
         {disconnected && (
           <div className="px-4 py-2 text-xs text-muted-foreground bg-muted/50 border-b border-border">
@@ -136,7 +166,7 @@ export default function WorkflowRunMonitor() {
         )}
 
         <div className="flex-1 overflow-y-auto divide-y divide-border">
-          {steps.map((runStep) => {
+          {displaySteps.map((runStep) => {
             const stepDef = stepDefMap.get(runStep.workflow_step_id)
             const pb = stepDef ? playbookMap.get(stepDef.playbook_id) : undefined
             const failOrder =
@@ -157,6 +187,9 @@ export default function WorkflowRunMonitor() {
                   <div className="text-sm font-medium">Step {stepOrder}</div>
                   <div className="text-xs text-muted-foreground truncate">
                     {pb?.name ?? 'Unknown playbook'}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {runStep.node_id ? (nodeMap.get(runStep.node_id)?.name ?? runStep.node_id.slice(0, 8)) : ''}
                   </div>
                   {failOrder !== undefined && (
                     <div className="text-xs text-muted-foreground">

@@ -218,13 +218,15 @@ async def create_workflow_run(
     db.add(run)
     await db.flush()
 
-    # Pre-create all WorkflowRunStep records with status=pending
+    # Pre-create all WorkflowRunStep records with status=pending (one per step × node)
     for step in sorted(wf.steps, key=lambda s: s.order):
-        db.add(WorkflowRunStep(
-            workflow_run_id=run.id,
-            workflow_step_id=step.id,
-            status="pending",
-        ))
+        for node_id in node_ids:
+            db.add(WorkflowRunStep(
+                workflow_run_id=run.id,
+                workflow_step_id=step.id,
+                node_id=node_id,
+                status="pending",
+            ))
 
     await db.commit()
 
