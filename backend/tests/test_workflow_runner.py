@@ -10,10 +10,11 @@ def _make_job(status="success"):
     return job
 
 
-def _make_run_step(step_id=None, status="pending"):
+def _make_run_step(step_id=None, status="pending", node_id=None):
     rs = MagicMock()
     rs.id = uuid.uuid4()
     rs.workflow_step_id = step_id or uuid.uuid4()
+    rs.node_id = node_id or uuid.uuid4()
     rs.job_id = None
     rs.status = status
     rs.started_at = None
@@ -53,13 +54,13 @@ async def test_orchestrator_success_single_step():
     job = _make_job(status="success")
 
     with patch("app.worker.tasks.workflow_runner._load_run_context") as mock_ctx, \
-         patch("app.worker.tasks.workflow_runner._create_job_for_step", return_value=job) as mock_create, \
+         patch("app.worker.tasks.workflow_runner._create_job_for_node", return_value=job) as mock_create, \
          patch("app.worker.tasks.workflow_runner._poll_until_done", return_value="success") as mock_poll, \
          patch("app.worker.tasks.workflow_runner._update_run_step") as mock_update_step, \
          patch("app.worker.tasks.workflow_runner._update_run") as mock_update_run, \
          patch("app.worker.tasks.workflow_runner._publish_event") as mock_pub:
 
-        mock_ctx.return_value = (run, [wf_step], {wf_step.id: run_step})
+        mock_ctx.return_value = (run, [wf_step], {wf_step.id: [run_step]})
 
         await _execute_workflow(str(run.id))
 
@@ -84,13 +85,13 @@ async def test_orchestrator_step_failure_no_fallback_fails_run():
     job = _make_job(status="failed")
 
     with patch("app.worker.tasks.workflow_runner._load_run_context") as mock_ctx, \
-         patch("app.worker.tasks.workflow_runner._create_job_for_step", return_value=job), \
+         patch("app.worker.tasks.workflow_runner._create_job_for_node", return_value=job), \
          patch("app.worker.tasks.workflow_runner._poll_until_done", return_value="failed"), \
          patch("app.worker.tasks.workflow_runner._update_run_step"), \
          patch("app.worker.tasks.workflow_runner._update_run") as mock_update_run, \
          patch("app.worker.tasks.workflow_runner._publish_event"):
 
-        mock_ctx.return_value = (run, [wf_step], {wf_step.id: run_step})
+        mock_ctx.return_value = (run, [wf_step], {wf_step.id: [run_step]})
 
         await _execute_workflow(str(run.id))
 
@@ -117,7 +118,7 @@ async def test_orchestrator_step_failure_with_fallback_jumps():
         return "failed" if call_count["n"] == 1 else "success"
 
     with patch("app.worker.tasks.workflow_runner._load_run_context") as mock_ctx, \
-         patch("app.worker.tasks.workflow_runner._create_job_for_step", return_value=_make_job()), \
+         patch("app.worker.tasks.workflow_runner._create_job_for_node", return_value=_make_job()), \
          patch("app.worker.tasks.workflow_runner._poll_until_done", side_effect=poll_side_effect), \
          patch("app.worker.tasks.workflow_runner._update_run_step"), \
          patch("app.worker.tasks.workflow_runner._update_run") as mock_update_run, \
@@ -126,7 +127,7 @@ async def test_orchestrator_step_failure_with_fallback_jumps():
         mock_ctx.return_value = (
             run,
             [wf_step, fallback_step],
-            {wf_step.id: run_step_0, fallback_step.id: run_step_1},
+            {wf_step.id: [run_step_0], fallback_step.id: [run_step_1]},
         )
 
         await _execute_workflow(str(run.id))
