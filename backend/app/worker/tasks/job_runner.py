@@ -157,7 +157,7 @@ async def _tail_and_chunk(
 
     buffer: list[str] = []
     chunk_seq = 0
-    last_flush = asyncio.get_event_loop().time()
+    last_flush = asyncio.get_running_loop().time()
 
     async def _flush() -> None:
         nonlocal chunk_seq, last_flush
@@ -173,7 +173,7 @@ async def _tail_and_chunk(
             await session.commit()
         chunk_seq += 1
         buffer.clear()
-        last_flush = asyncio.get_event_loop().time()
+        last_flush = asyncio.get_running_loop().time()
 
     if stdout_path:
         async with aiofiles.open(stdout_path, "r", errors="replace") as f:
@@ -181,7 +181,7 @@ async def _tail_and_chunk(
                 raw = await f.readline()
                 if raw:
                     buffer.append(raw.rstrip("\n"))
-                    if asyncio.get_event_loop().time() - last_flush >= 1.5:
+                    if asyncio.get_running_loop().time() - last_flush >= 1.5:
                         await _flush()
                 elif not runner_thread.is_alive():
                     # Thread finished — drain any remaining bytes then flush
@@ -190,13 +190,12 @@ async def _tail_and_chunk(
                     await _flush()
                     break
                 else:
-                    if buffer and asyncio.get_event_loop().time() - last_flush >= 1.5:
+                    if buffer and asyncio.get_running_loop().time() - last_flush >= 1.5:
                         await _flush()
                     await asyncio.sleep(0.1)
     else:
         # stdout file never appeared — just wait for the thread to finish
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, runner_thread.join)
+        await asyncio.get_running_loop().run_in_executor(None, runner_thread.join)
 
 
 # ---------------------------------------------------------------------------
