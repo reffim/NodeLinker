@@ -8,16 +8,13 @@ One task is dispatched per (job, node) pair. Each task:
   4. Fetches SSH credential from HashiCorp Vault (via node.credential)
   5. Writes playbook YAML + inventory (with Vault-fetched credentials) to a temp dir
   6. Starts ansible_runner.run_async() in a thread
-  7. Tails the stdout artifact with aiofiles, publishing each line to Redis pub/sub
-  8. On completion, compresses and saves logs to Object Storage (S3 / Local FS)
-  9. Updates job_node.status + exit_code + log_file_url
- 10. If this is the last node to finish, updates the overall job status
- 11. Cancels the heartbeat coroutine and releases the exclusive lock
- 12. Publishes a `done` event to the Redis channel so WebSocket clients close
+  7. Tails the stdout artifact with aiofiles, buffering lines and flushing to
+     job_log_chunks every 1.5 s
+  8. Updates job_node.status + exit_code
+  9. If this is the last node to finish, updates the overall job status
+ 10. Cancels the heartbeat coroutine and releases the exclusive lock
 """
 import asyncio
-import gzip
-import json
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -34,7 +31,7 @@ from sqlalchemy.orm import selectinload
 from app.core.config import settings
 from app.core.vault import get_credential
 from app.db.session import async_session_factory
-from app.models.models import Job, JobNode, Node, Playbook
+from app.models.models import Job, JobLogChunk, JobNode, Node, Playbook
 from app.services.lock_service import (
     LOCK_TTL_SECONDS,
     acquire_lock,
@@ -43,19 +40,11 @@ from app.services.lock_service import (
 )
 from app.worker.celery_app import celery_app
 
-# Retry interval when the exclusive lock is held by another job (seconds)
 LOCK_RETRY_COUNTDOWN: int = 30
-# Maximum number of retry attempts before giving up (30 s * 120 = 1 hour)
 LOCK_MAX_RETRIES: int = 120
-# Heartbeat interval: renew lock TTL at half the TTL duration
 HEARTBEAT_INTERVAL: int = LOCK_TTL_SECONDS // 2
 
 logger = logging.getLogger(__name__)
-
-# Redis pub/sub channel template: job:{job_id}:logs
-# Messages are JSON: {"type": "log", "line_number": N, "content": "...", "node_id": "..."}
-#                 or {"type": "done", "status": "success|failed|cancelled", "node_id": "..."}
-CHANNEL_TPL = "job:{job_id}:logs"
 
 
 # ---------------------------------------------------------------------------
@@ -69,16 +58,11 @@ async def _lock_heartbeat(
     token: str,
     stop_event: asyncio.Event,
 ) -> None:
-    """
-    Periodically extend the Redis lock TTL while a job is running.
-    Stops when `stop_event` is set (job finished or failed).
-    Prevents deadlocks from long-running jobs outliving the initial TTL.
-    """
     while not stop_event.is_set():
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=HEARTBEAT_INTERVAL)
         except asyncio.TimeoutError:
-            pass  # expected — time to renew
+            pass
 
         if stop_event.is_set():
             break
@@ -89,46 +73,6 @@ async def _lock_heartbeat(
                 "heartbeat: lock extend failed — lock may have expired node=%s group=%s job=%s",
                 node_id, playbook_group, token,
             )
-
-
-# ---------------------------------------------------------------------------
-# Log storage helpers
-# ---------------------------------------------------------------------------
-
-def _log_file_path(job_id: str, node_id: str) -> Path:
-    """Return the local FS path where the compressed log will be stored."""
-    base = Path(settings.LOG_STORAGE_BASE_PATH)
-    base.mkdir(parents=True, exist_ok=True)
-    return base / f"{job_id}_{node_id}.log.gz"
-
-
-def _save_log_local(lines: list[str], job_id: str, node_id: str) -> str:
-    """Compress and write log lines to local FS; return the file URL."""
-    path = _log_file_path(job_id, node_id)
-    content = "\n".join(lines).encode("utf-8")
-    with gzip.open(path, "wb") as f:
-        f.write(content)
-    logger.debug("log saved: path=%s lines=%d", path, len(lines))
-    return f"file://{path}"
-
-
-async def _save_logs_to_storage(lines: list[str], job_id: str, node_id: str) -> str | None:
-    """
-    Persist log lines to the configured storage backend.
-    Returns the URL/path of the stored log file, or None on failure.
-
-    Currently supports 'local' storage.
-    's3' support can be added here (e.g. via aiobotocore).
-    """
-    if not lines:
-        return None
-    try:
-        loop = asyncio.get_event_loop()
-        url = await loop.run_in_executor(None, _save_log_local, lines, job_id, node_id)
-        return url
-    except Exception as exc:
-        logger.error("log storage failed job=%s node=%s: %s", job_id, node_id, exc)
-        return None
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +91,6 @@ async def _build_inventory(node: Any, credential_data: dict | None, private_data
     }
     if credential_data:
         if "private_key" in credential_data:
-            # Write key to a temp file within the private data dir
             key_path = Path(private_data_dir) / "ssh_key"
             key_path.write_text(credential_data["private_key"])
             key_path.chmod(0o600)
@@ -156,7 +99,7 @@ async def _build_inventory(node: Any, credential_data: dict | None, private_data
             host_vars["ansible_ssh_pass"] = credential_data["password"]
 
     vars_str = " ".join(f"{k}={v}" for k, v in host_vars.items())
-    (inv_dir / "hosts").write_text(f"[targets]\ntarget_node {vars_str}\n")
+    (inv_dir / "hosts").write_text(f"[targets]\n{node.name} {vars_str}\n")
 
 
 def _write_playbook(content: str, private_data_dir: str, name: str = "site.yml") -> str:
@@ -171,7 +114,6 @@ def _start_runner(
     playbook_name: str,
     extra_vars: dict,
 ) -> tuple[Any, Any]:
-    """Start ansible-runner asynchronously (returns thread + runner object)."""
     runner_kwargs: dict[str, Any] = {
         "private_data_dir": private_data_dir,
         "playbook": playbook_name,
@@ -187,23 +129,20 @@ def _start_runner(
 
 
 # ---------------------------------------------------------------------------
-# Async log-tail (aiofiles-based)
+# Async log-tail with DB chunking
 # ---------------------------------------------------------------------------
 
-async def _tail_and_stream(
+async def _tail_and_chunk(
     private_data_dir: str,
     runner_thread: Any,
-    channel: str,
     job_id: str,
     node_id: str,
-    redis_client: aioredis.Redis,
-) -> list[str]:
+) -> None:
     """
-    Async file-tail of the ansible-runner stdout artifact using aiofiles.
-    Publishes each line to Redis pub/sub in real time.
-    Returns the list of all collected lines (to be persisted to storage).
+    Tail ansible-runner stdout asynchronously.
+    Buffer lines in memory and flush to job_log_chunks every 1.5 s.
     """
-    # Wait for ansible-runner to create the artifact directory and the stdout file (up to 5 s)
+    # Wait up to 5 s for ansible-runner to create the stdout artifact
     stdout_path: Path | None = None
     for _ in range(50):
         artifacts = Path(private_data_dir) / "artifacts"
@@ -216,49 +155,48 @@ async def _tail_and_stream(
                     break
         await asyncio.sleep(0.1)
 
-    all_lines: list[str] = []
-    line_number = 0
+    buffer: list[str] = []
+    chunk_seq = 0
+    last_flush = asyncio.get_event_loop().time()
+
+    async def _flush() -> None:
+        nonlocal chunk_seq, last_flush
+        if not buffer:
+            return
+        async with async_session_factory() as session:
+            session.add(JobLogChunk(
+                job_id=uuid.UUID(job_id),
+                node_id=uuid.UUID(node_id),
+                chunk_seq=chunk_seq,
+                content="\n".join(buffer),
+            ))
+            await session.commit()
+        chunk_seq += 1
+        buffer.clear()
+        last_flush = asyncio.get_event_loop().time()
 
     if stdout_path:
         async with aiofiles.open(stdout_path, "r", errors="replace") as f:
             while True:
                 raw = await f.readline()
                 if raw:
-                    line = raw.rstrip("\n")
-                    line_number += 1
-                    all_lines.append(line)
-                    try:
-                        await redis_client.publish(channel, json.dumps({
-                            "type": "log",
-                            "line_number": line_number,
-                            "content": line,
-                            "node_id": node_id,
-                        }))
-                    except Exception:
-                        pass  # don't let Redis errors abort the run
+                    buffer.append(raw.rstrip("\n"))
+                    if asyncio.get_event_loop().time() - last_flush >= 1.5:
+                        await _flush()
                 elif not runner_thread.is_alive():
-                    # Thread finished — drain any remaining bytes
+                    # Thread finished — drain any remaining bytes then flush
                     async for raw in f:
-                        line = raw.rstrip("\n")
-                        line_number += 1
-                        all_lines.append(line)
-                        try:
-                            await redis_client.publish(channel, json.dumps({
-                                "type": "log",
-                                "line_number": line_number,
-                                "content": line,
-                                "node_id": node_id,
-                            }))
-                        except Exception:
-                            pass
+                        buffer.append(raw.rstrip("\n"))
+                    await _flush()
                     break
                 else:
+                    if buffer and asyncio.get_event_loop().time() - last_flush >= 1.5:
+                        await _flush()
                     await asyncio.sleep(0.1)
     else:
+        # stdout file never appeared — just wait for the thread to finish
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, runner_thread.join)
-
-    return all_lines
 
 
 # ---------------------------------------------------------------------------
@@ -327,12 +265,8 @@ async def _finish_node(
     node_id: str,
     node_status: str,
     exit_code: int | None,
-    log_file_url: str | None,
 ) -> None:
-    """
-    Update job_node status and, if all nodes have finished, update the overall job status.
-    Stores the log_file_url (Object Storage / Local FS path) in job_nodes.
-    """
+    """Update job_node status and, if all nodes finished, update the overall job status."""
     async with async_session_factory() as session:
         jn_res = await session.execute(
             select(JobNode).where(
@@ -344,11 +278,9 @@ async def _finish_node(
         if jn:
             jn.status = node_status
             jn.exit_code = exit_code
-            jn.log_file_url = log_file_url
 
         await session.flush()
 
-        # Check if all nodes in this job are done
         all_nodes_res = await session.execute(
             select(JobNode).where(JobNode.job_id == uuid.UUID(job_id))
         )
@@ -384,14 +316,11 @@ def run_job(
     """Execute an Ansible playbook on a single node.
 
     - SSH credentials are fetched from HashiCorp Vault via node.credential.
-    - Real-time logs are streamed to Redis pub/sub.
-    - Completed logs are compressed and stored to Object Storage / Local FS.
+    - Log lines are buffered and flushed to job_log_chunks every 1.5 s.
     - If the playbook has an exclusive_group, a Redis lock with TTL is held,
       with a heartbeat coroutine renewing it periodically to prevent deadlocks.
     """
     logger.info("run_job: job=%s node=%s", job_id, node_id)
-
-    channel = CHANNEL_TPL.format(job_id=job_id)
 
     async def _execute() -> dict:
         redis_client = aioredis.from_url(settings.REDIS_URL)
@@ -433,16 +362,12 @@ def run_job(
                     "run_job: lock acquired node=%s group=%s job=%s",
                     node_id, playbook.exclusive_group, job_id,
                 )
-                # Start heartbeat to keep the lock alive
                 heartbeat_task = asyncio.create_task(
                     _lock_heartbeat(redis_client, node_id, lock_group, job_id, stop_heartbeat)
                 )
 
             if not playbook.content:
-                await _finish_node(job_id, node_id, "failed", None, None)
-                await redis_client.publish(channel, json.dumps({
-                    "type": "done", "status": "failed", "node_id": node_id,
-                }))
+                await _finish_node(job_id, node_id, "failed", None)
                 return {"status": "failed", "error": "playbook has no content"}
 
             await _mark_running(job_id, node_id)
@@ -458,9 +383,7 @@ def run_job(
                     logger.error(
                         "run_job: vault credential fetch failed node=%s: %s", node_id, exc
                     )
-                    # Proceed without credential — Ansible will use default key discovery
 
-            stdout_lines: list[str] = []
             rc: int | None = None
             success = False
 
@@ -469,20 +392,15 @@ def run_job(
                     await _build_inventory(node, credential_data, tmpdir)
                     playbook_name = _write_playbook(playbook.content, tmpdir)
 
-                    # Start ansible-runner in its own thread
                     runner_thread, runner = _start_runner(tmpdir, playbook_name, extra_vars)
 
-                    # Tail the artifact file with aiofiles + publish to Redis
-                    stdout_lines = await _tail_and_stream(
-                        tmpdir, runner_thread, channel, job_id, node_id, redis_client
-                    )
+                    await _tail_and_chunk(tmpdir, runner_thread, job_id, node_id)
 
                     rc = runner.rc
                     success = runner.status == "successful"
 
                 except Exception as exc:
                     logger.exception("run_job: error job=%s node=%s: %s", job_id, node_id, exc)
-                    stdout_lines = [f"Internal error: {exc}"]
                     rc = -1
                     success = False
 
@@ -491,33 +409,16 @@ def run_job(
                 check = await session.execute(select(Job).where(Job.id == uuid.UUID(job_id)))
                 current = check.scalar_one_or_none()
                 if current and current.status == "cancelled":
-                    log_url = await _save_logs_to_storage(stdout_lines, job_id, node_id)
-                    await _finish_node(job_id, node_id, "failed", rc, log_url)
-                    await redis_client.publish(channel, json.dumps({
-                        "type": "done", "status": "cancelled", "node_id": node_id,
-                    }))
+                    await _finish_node(job_id, node_id, "failed", rc)
                     return {"status": "cancelled"}
 
-            # ------------------------------------------------------------------
-            # Persist logs to Object Storage / Local FS
-            # ------------------------------------------------------------------
-            log_file_url = await _save_logs_to_storage(stdout_lines, job_id, node_id)
-
             node_status = "success" if success else "failed"
-            await _finish_node(job_id, node_id, node_status, rc, log_file_url)
+            await _finish_node(job_id, node_id, node_status, rc)
 
-            await redis_client.publish(channel, json.dumps({
-                "type": "done", "status": node_status, "node_id": node_id,
-            }))
-
-            logger.info(
-                "run_job: job=%s node=%s status=%s rc=%s log=%s",
-                job_id, node_id, node_status, rc, log_file_url,
-            )
-            return {"status": node_status, "rc": rc, "lines": len(stdout_lines), "log_file_url": log_file_url}
+            logger.info("run_job: job=%s node=%s status=%s rc=%s", job_id, node_id, node_status, rc)
+            return {"status": node_status, "rc": rc}
 
         finally:
-            # Stop heartbeat
             stop_heartbeat.set()
             if heartbeat_task:
                 heartbeat_task.cancel()
@@ -526,7 +427,6 @@ def run_job(
                 except asyncio.CancelledError:
                     pass
 
-            # Release the exclusive lock
             if lock_acquired and lock_node_id and lock_group:
                 try:
                     await release_lock(redis_client, lock_node_id, lock_group, token=job_id)
