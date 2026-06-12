@@ -39,11 +39,6 @@ class Settings(BaseSettings):
     VAULT_TOKEN: Optional[str] = None
     VAULT_MOUNT_PATH: str = "secret"  # KV v2 mount path
 
-    # Job log storage (logs are streamed via Redis; persisted here after completion)
-    # LOG_STORAGE_TYPE: "local" stores to local FS; "s3" stores to S3-compatible storage
-    LOG_STORAGE_TYPE: str = "local"
-    LOG_STORAGE_BASE_PATH: str = "/var/log/nodelinker"
-
     # CORS
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:3000"]
 

@@ -175,27 +175,31 @@ async def _tail_and_chunk(
         buffer.clear()
         last_flush = asyncio.get_running_loop().time()
 
-    if stdout_path:
-        async with aiofiles.open(stdout_path, "r", errors="replace") as f:
-            while True:
-                raw = await f.readline()
-                if raw:
-                    buffer.append(raw.rstrip("\n"))
-                    if asyncio.get_running_loop().time() - last_flush >= 1.5:
-                        await _flush()
-                elif not runner_thread.is_alive():
-                    # Thread finished — drain any remaining bytes then flush
-                    async for raw in f:
+    try:
+        if stdout_path:
+            async with aiofiles.open(stdout_path, "r", errors="replace") as f:
+                while True:
+                    raw = await f.readline()
+                    if raw:
                         buffer.append(raw.rstrip("\n"))
-                    await _flush()
-                    break
-                else:
-                    if buffer and asyncio.get_running_loop().time() - last_flush >= 1.5:
+                        if asyncio.get_running_loop().time() - last_flush >= 1.5:
+                            await _flush()
+                    elif not runner_thread.is_alive():
+                        # Thread finished — drain any remaining bytes then flush
+                        async for raw in f:
+                            buffer.append(raw.rstrip("\n"))
                         await _flush()
-                    await asyncio.sleep(0.1)
-    else:
-        # stdout file never appeared — just wait for the thread to finish
-        await asyncio.get_running_loop().run_in_executor(None, runner_thread.join)
+                        break
+                    else:
+                        if buffer and asyncio.get_running_loop().time() - last_flush >= 1.5:
+                            await _flush()
+                        await asyncio.sleep(0.1)
+        else:
+            # stdout file never appeared — just wait for the thread to finish
+            await asyncio.get_running_loop().run_in_executor(None, runner_thread.join)
+    finally:
+        # Flush any remaining buffered lines even if an exception interrupted tailing
+        await _flush()
 
 
 # ---------------------------------------------------------------------------
