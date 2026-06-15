@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Loader2, CheckCircle, XCircle, Minus, Circle } from 'lucide-react'
+import { ArrowLeft, ChevronDown, ChevronRight, Loader2, CheckCircle, XCircle, Minus, Circle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { LogPanel } from '@/components/LogPanel'
@@ -36,6 +36,13 @@ function StepStatusIcon({ status }: { status: WorkflowRunStep['status'] }) {
     default:
       return <Circle className="h-4 w-4 text-muted-foreground flex-shrink-0" />
   }
+}
+
+function deriveNodeStatus(steps: WorkflowRunStep[]): WorkflowRun['status'] {
+  if (steps.some((s) => s.status === 'running')) return 'running'
+  if (steps.some((s) => s.status === 'failed')) return 'failed'
+  if (steps.every((s) => s.status === 'success' || s.status === 'skipped')) return 'success'
+  return 'pending'
 }
 
 export default function WorkflowRunMonitor() {
@@ -80,6 +87,16 @@ export default function WorkflowRunMonitor() {
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null)
   const [cancelError, setCancelError] = useState<string | null>(null)
 
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set())
+
+  const toggleNode = (nodeId: string) => {
+    setExpandedNodes((prev) => {
+      const next = new Set(prev)
+      next.has(nodeId) ? next.delete(nodeId) : next.add(nodeId)
+      return next
+    })
+  }
+
   const playbookMap = new Map(playbooks.map((pb) => [pb.id, pb]))
   const stepDefMap = new Map(workflow?.steps.map((s) => [s.id, s]) ?? [])
   const stepOrderMap = new Map(workflow?.steps.map((s) => [s.id, s.order]) ?? [])
@@ -93,14 +110,32 @@ export default function WorkflowRunMonitor() {
     run && TERMINAL_STATUSES.has(run.status) && steps.every((s) => s.status === 'pending')
   const displaySteps = wsStepsMissed ? (run?.workflow_run_steps ?? steps) : steps
 
+  // Auto-expand: any node_id not yet in set gets added (defaults to expanded)
+  useEffect(() => {
+    setExpandedNodes((prev) => {
+      const next = new Set(prev)
+      for (const s of displaySteps) {
+        if (s.node_id && !next.has(s.node_id)) next.add(s.node_id)
+      }
+      return next
+    })
+  }, [displaySteps])
+
   // Auto-select: running step while active; failed step (or first) once terminal
   useEffect(() => {
     const running = displaySteps.find((s) => s.status === 'running')
     if (running) {
       setSelectedStepId(running.id)
+      if (running.node_id) {
+        setExpandedNodes((prev) => new Set([...prev, running.node_id!]))
+      }
     } else if (!selectedStepId && displaySteps.length > 0) {
       const failed = displaySteps.find((s) => s.status === 'failed')
-      setSelectedStepId((failed ?? displaySteps[0]).id)
+      const target = failed ?? displaySteps[0]
+      setSelectedStepId(target.id)
+      if (target.node_id) {
+        setExpandedNodes((prev) => new Set([...prev, target.node_id!]))
+      }
     }
   }, [displaySteps, selectedStepId])
 
@@ -114,6 +149,18 @@ export default function WorkflowRunMonitor() {
   })
 
   const selectedStep = displaySteps.find((s) => s.id === selectedStepId) ?? null
+
+  const stepsByNode = new Map<string, WorkflowRunStep[]>()
+  for (const step of displaySteps) {
+    const nid = step.node_id ?? 'unknown'
+    if (!stepsByNode.has(nid)) stepsByNode.set(nid, [])
+    stepsByNode.get(nid)!.push(step)
+  }
+
+  // TODO(Task 2): replace flat step list with node-grouped accordion using:
+  // expandedNodes, toggleNode, deriveNodeStatus, stepsByNode, ChevronDown, ChevronRight
+  const _task2Refs = [expandedNodes, toggleNode, deriveNodeStatus, stepsByNode, ChevronDown, ChevronRight]
+  void _task2Refs
 
   return (
     <div className="flex h-full">
