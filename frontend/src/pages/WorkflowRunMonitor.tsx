@@ -157,11 +157,6 @@ export default function WorkflowRunMonitor() {
     stepsByNode.get(nid)!.push(step)
   }
 
-  // TODO(Task 2): replace flat step list with node-grouped accordion using:
-  // expandedNodes, toggleNode, deriveNodeStatus, stepsByNode, ChevronDown, ChevronRight
-  const _task2Refs = [expandedNodes, toggleNode, deriveNodeStatus, stepsByNode, ChevronDown, ChevronRight]
-  void _task2Refs
-
   return (
     <div className="flex h-full">
       {/* Left panel — step list */}
@@ -212,39 +207,60 @@ export default function WorkflowRunMonitor() {
           </div>
         )}
 
-        <div className="flex-1 overflow-y-auto divide-y divide-border">
-          {displaySteps.map((runStep) => {
-            const stepDef = stepDefMap.get(runStep.workflow_step_id)
-            const pb = stepDef ? playbookMap.get(stepDef.playbook_id) : undefined
-            const failOrder =
-              stepDef?.on_failure_step_id
-                ? stepOrderMap.get(stepDef.on_failure_step_id)
-                : undefined
-            const stepOrder = stepDef?.order ?? 0
+        <div className="flex-1 overflow-y-auto">
+          {Array.from(stepsByNode.entries()).map(([nodeId, nodeSteps]) => {
+            const node = nodeMap.get(nodeId)
+            const isExpanded = expandedNodes.has(nodeId)
+            const nodeSummary = deriveNodeStatus(nodeSteps)
             return (
-              <button
-                key={runStep.id}
-                onClick={() => setSelectedStepId(runStep.id)}
-                className={`w-full text-left px-4 py-3 hover:bg-accent transition-colors flex items-start gap-3 ${
-                  selectedStepId === runStep.id ? 'bg-accent' : ''
-                }`}
-              >
-                <StepStatusIcon status={runStep.status} />
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium">Step {stepOrder}</div>
-                  <div className="text-xs text-muted-foreground truncate">
-                    {pb?.name ?? 'Unknown playbook'}
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    {runStep.node_id ? (nodeMap.get(runStep.node_id)?.name ?? runStep.node_id.slice(0, 8)) : ''}
-                  </div>
-                  {failOrder !== undefined && (
-                    <div className="text-xs text-muted-foreground">
-                      → Step {failOrder} on failure
-                    </div>
-                  )}
-                </div>
-              </button>
+              <div key={nodeId} className="border-b border-border">
+                <button
+                  onClick={() => toggleNode(nodeId)}
+                  className="w-full text-left px-4 py-2.5 flex items-center gap-2 bg-muted/30 hover:bg-muted/50 transition-colors"
+                >
+                  {isExpanded
+                    ? <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+                    : <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+                  }
+                  <span className="text-sm font-medium flex-1 truncate">
+                    {node?.name ?? nodeId.slice(0, 8)}
+                  </span>
+                  <Badge variant={runStatusVariant(nodeSummary)} className="text-[10px]">
+                    {nodeSummary}
+                  </Badge>
+                </button>
+                {isExpanded && nodeSteps.map((runStep) => {
+                  const stepDef = stepDefMap.get(runStep.workflow_step_id)
+                  const pb = stepDef ? playbookMap.get(stepDef.playbook_id) : undefined
+                  const failOrder =
+                    stepDef?.on_failure_step_id
+                      ? stepOrderMap.get(stepDef.on_failure_step_id)
+                      : undefined
+                  const stepOrder = stepDef?.order ?? 0
+                  return (
+                    <button
+                      key={runStep.id}
+                      onClick={() => setSelectedStepId(runStep.id)}
+                      className={`w-full text-left pl-8 pr-4 py-2.5 hover:bg-accent transition-colors flex items-start gap-3 border-t border-border/50 ${
+                        selectedStepId === runStep.id ? 'bg-accent' : ''
+                      }`}
+                    >
+                      <StepStatusIcon status={runStep.status} />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium">Step {stepOrder}</div>
+                        <div className="text-xs text-muted-foreground truncate">
+                          {pb?.name ?? 'Unknown playbook'}
+                        </div>
+                        {failOrder !== undefined && (
+                          <div className="text-xs text-muted-foreground">
+                            → Step {failOrder} on failure
+                          </div>
+                        )}
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
             )
           })}
         </div>
