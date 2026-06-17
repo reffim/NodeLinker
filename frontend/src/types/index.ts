@@ -102,11 +102,67 @@ export interface JobCreate {
   extra_vars?: Record<string, unknown>
 }
 
-export interface JobLog {
+export interface JobLogChunk {
   id: number
   job_id: string
-  node_id: string | null
-  line_number: number
+  node_id: string
+  chunk_seq: number
   content: string
   created_at: string
+}
+
+export interface WorkflowStep {
+  id: string
+  workflow_id: string
+  order: number
+  playbook_id: string
+  on_failure_step_id: string | null
+}
+
+export interface Workflow {
+  id: string
+  name: string
+  description: string | null
+  created_at: string
+  updated_at: string
+  steps: WorkflowStep[]
+}
+
+export interface WorkflowCreate {
+  name: string
+  description?: string
+  steps: {
+    order: number
+    playbook_id: string
+    on_failure_step_order: number | null
+  }[]
+}
+
+export interface WorkflowRunStep {
+  id: string
+  workflow_run_id: string
+  workflow_step_id: string
+  job_id: string | null
+  node_id: string | null
+  status: 'pending' | 'running' | 'success' | 'failed' | 'skipped'
+  started_at: string | null
+  finished_at: string | null
+}
+
+export interface WorkflowRun {
+  id: string
+  workflow_id: string
+  status: 'pending' | 'running' | 'success' | 'failed' | 'cancelled'
+  created_by: string | null
+  node_ids: string[]
+  extra_vars: Record<string, unknown> | null
+  started_at: string | null
+  finished_at: string | null
+  created_at: string
+  workflow_run_steps: WorkflowRunStep[]
+}
+
+export interface WorkflowRunCreate {
+  node_ids: string[]
+  extra_vars?: Record<string, unknown>
 }

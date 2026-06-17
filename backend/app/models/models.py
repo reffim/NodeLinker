@@ -11,8 +11,9 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+import sqlalchemy as sa
 
 from app.db.session import Base
 
@@ -172,9 +173,6 @@ class Job(Base):
 
 # ---------------------------------------------------------------------------
 # Job-Node mapping
-# log_file_url: points to Object Storage (S3) or Local FS path where the
-# compressed log archive is stored after the job completes.
-# Real-time streaming is done via Redis pub/sub; this is the persistent record.
 # ---------------------------------------------------------------------------
 class JobNode(Base):
     __tablename__ = "job_nodes"
@@ -191,7 +189,144 @@ class JobNode(Base):
         default="pending",
     )
     exit_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    log_file_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
 
     job: Mapped["Job"] = relationship("Job", back_populates="job_nodes")
     node: Mapped[Optional["Node"]] = relationship("Node", back_populates="job_nodes")
+
+
+# ---------------------------------------------------------------------------
+# Job log chunks
+# Logs are buffered in memory during job execution and flushed every 1.5 s
+# as a single row. The frontend polls GET /jobs/{id}/logs/chunks?after={id}.
+# ---------------------------------------------------------------------------
+class JobLogChunk(Base):
+    __tablename__ = "job_log_chunks"
+
+    id: Mapped[int] = mapped_column(
+        sa.BigInteger, primary_key=True, autoincrement=True
+    )
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False
+    )
+    node_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("nodes.id", ondelete="CASCADE"), nullable=False
+    )
+    chunk_seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+# ---------------------------------------------------------------------------
+# Workflows
+# ---------------------------------------------------------------------------
+class Workflow(Base):
+    __tablename__ = "workflows"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    steps: Mapped[list["WorkflowStep"]] = relationship(
+        "WorkflowStep", back_populates="workflow",
+        order_by="WorkflowStep.order", cascade="all, delete-orphan"
+    )
+    runs: Mapped[list["WorkflowRun"]] = relationship("WorkflowRun", back_populates="workflow")
+
+
+class WorkflowStep(Base):
+    __tablename__ = "workflow_steps"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    workflow_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workflows.id", ondelete="CASCADE"), nullable=False
+    )
+    order: Mapped[int] = mapped_column(Integer, nullable=False)
+    playbook_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("playbooks.id", ondelete="RESTRICT"), nullable=False
+    )
+    on_failure_step_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workflow_steps.id", ondelete="SET NULL"), nullable=True
+    )
+
+    workflow: Mapped["Workflow"] = relationship("Workflow", back_populates="steps")
+    playbook: Mapped["Playbook"] = relationship("Playbook")
+    on_failure_step: Mapped[Optional["WorkflowStep"]] = relationship(
+        "WorkflowStep", remote_side="WorkflowStep.id", foreign_keys="WorkflowStep.on_failure_step_id"
+    )
+
+
+class WorkflowRun(Base):
+    __tablename__ = "workflow_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    workflow_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workflows.id", ondelete="RESTRICT"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(
+        Enum("pending", "running", "success", "failed", "cancelled", name="workflow_run_status"),
+        nullable=False,
+        default="pending",
+    )
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    node_ids: Mapped[list[uuid.UUID]] = mapped_column(ARRAY(UUID(as_uuid=True)), nullable=False)
+    extra_vars: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    workflow: Mapped["Workflow"] = relationship("Workflow", back_populates="runs")
+    creator: Mapped[Optional["User"]] = relationship("User")
+    workflow_run_steps: Mapped[list["WorkflowRunStep"]] = relationship(
+        "WorkflowRunStep", back_populates="workflow_run",
+        cascade="all, delete-orphan"
+    )
+
+
+class WorkflowRunStep(Base):
+    __tablename__ = "workflow_run_steps"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    workflow_run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workflow_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    workflow_step_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workflow_steps.id", ondelete="RESTRICT"), nullable=False
+    )
+    job_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True
+    )
+    node_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("nodes.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(
+        Enum("pending", "running", "success", "failed", "skipped", name="workflow_run_step_status"),
+        nullable=False,
+        default="pending",
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    workflow_run: Mapped["WorkflowRun"] = relationship("WorkflowRun", back_populates="workflow_run_steps")
+    workflow_step: Mapped["WorkflowStep"] = relationship("WorkflowStep")
+    job: Mapped[Optional["Job"]] = relationship("Job")
+    node: Mapped[Optional["Node"]] = relationship("Node")

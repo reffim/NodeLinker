@@ -1,0 +1,60 @@
+<h2>설계 — 섹션 1: 페이지 구조 & 라우팅</h2>
+<p class="subtitle">새로 추가되는 페이지와 기존 패턴과의 관계</p>
+
+<div class="section">
+  <h3>라우팅 맵</h3>
+  <div style="font-family: monospace; font-size: 13px; line-height: 2; background: #1e1e2e; color: #cdd6f4; padding: 20px; border-radius: 8px;">
+    <div style="color: #6c7086;"># 기존 라우트 (변경 없음)</div>
+    <div>/nodes              → NodeDashboard</div>
+    <div>/playbooks          → PlaybookEditor</div>
+    <div>/groups             → ExclusiveGroups</div>
+    <div>/jobs               → JobMonitor</div>
+    <div>/jobs/:jobId        → JobMonitor (상세)</div>
+    <br>
+    <div style="color: #a6e3a1;"># 신규 라우트 (워크플로우)</div>
+    <div style="color: #a6e3a1;">/workflows              → WorkflowList</div>
+    <div style="color: #a6e3a1;">/workflows/new          → WorkflowEditor (신규)</div>
+    <div style="color: #a6e3a1;">/workflows/:id/edit     → WorkflowEditor (편집)</div>
+    <div style="color: #a6e3a1;">/workflows/runs/:runId  → WorkflowRunMonitor</div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>사이드바 변경</h3>
+  <div style="display: flex; gap: 32px; align-items: flex-start;">
+    <div>
+      <div class="label" style="margin-bottom:8px;">현재</div>
+      <div style="background: #1e1e2e; color: #cdd6f4; border-radius: 8px; padding: 16px; width: 160px; font-size: 13px; line-height: 2.2;">
+        <div>🖥 Nodes</div>
+        <div>📖 Playbooks</div>
+        <div>🔒 Groups</div>
+        <div>⚡ Jobs</div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;font-size:24px;padding-top:48px;">→</div>
+    <div>
+      <div class="label" style="margin-bottom:8px;">추가 후</div>
+      <div style="background: #1e1e2e; color: #cdd6f4; border-radius: 8px; padding: 16px; width: 160px; font-size: 13px; line-height: 2.2;">
+        <div>🖥 Nodes</div>
+        <div>📖 Playbooks</div>
+        <div>🔒 Groups</div>
+        <div>⚡ Jobs</div>
+        <div style="color: #a6e3a1; font-weight: bold;">🔗 Workflows</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>신규 파일 목록</h3>
+  <div style="font-family: monospace; font-size: 13px; line-height: 2; background: #1e1e2e; color: #cdd6f4; padding: 20px; border-radius: 8px;">
+    <div style="color: #89b4fa;">src/api/workflows.ts</div>
+    <div style="color: #89b4fa;">src/hooks/useWorkflowRunWS.ts</div>
+    <div style="color: #89b4fa;">src/pages/WorkflowList.tsx</div>
+    <div style="color: #89b4fa;">src/pages/WorkflowEditor.tsx</div>
+    <div style="color: #89b4fa;">src/pages/WorkflowRunMonitor.tsx</div>
+    <div style="color: #6c7086;">src/types/index.ts          ← Workflow 타입 추가</div>
+    <div style="color: #6c7086;">src/components/Layout.tsx   ← Workflows 메뉴 추가</div>
+    <div style="color: #6c7086;">src/App.tsx                 ← 라우트 추가</div>
+  </div>
+</div>

@@ -15,9 +15,6 @@ class JobNodeResponse(BaseModel):
     node_id: uuid.UUID
     status: str
     exit_code: Optional[int]
-    # URL pointing to Object Storage (S3) or Local FS where the compressed
-    # log archive is stored. Null while the job is still running.
-    log_file_url: Optional[str]
 
     model_config = {"from_attributes": True}
 
@@ -32,5 +29,16 @@ class JobResponse(BaseModel):
     exclusive_lock_key: Optional[str]
     created_at: datetime
     job_nodes: list[JobNodeResponse]
+
+    model_config = {"from_attributes": True}
+
+
+class JobLogChunkResponse(BaseModel):
+    id: int
+    job_id: uuid.UUID
+    node_id: uuid.UUID
+    chunk_seq: int
+    content: str
+    created_at: datetime
 
     model_config = {"from_attributes": True}

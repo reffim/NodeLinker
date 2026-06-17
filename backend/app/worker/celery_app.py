@@ -1,5 +1,4 @@
 from celery import Celery
-from celery.schedules import crontab
 
 from app.core.config import settings
 
@@ -10,6 +9,7 @@ celery_app = Celery(
     include=[
         "app.worker.tasks.health_probe",
         "app.worker.tasks.job_runner",
+        "app.worker.tasks.workflow_runner",
     ],
 )
 
@@ -23,6 +23,10 @@ celery_app.conf.update(
         "probe-all-nodes": {
             "task": "app.worker.tasks.health_probe.probe_all_nodes",
             "schedule": 30.0,  # every 30 seconds
+        },
+        "sweep-stale-workflow-runs": {
+            "task": "app.worker.tasks.workflow_runner.sweep_stale_runs",
+            "schedule": 300.0,  # every 5 minutes
         },
     },
 )
