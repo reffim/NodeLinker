@@ -31,8 +31,8 @@ interface WorkflowGraphProps {
   playbookMap: Map<string, Playbook>
   runSteps?: WorkflowRunStep[]        // run view only
   nodeMap?: Map<string, Node>         // run view only
-  onStepClick?: (stepId: string) => void
-  selectedStepId?: string
+  onStepClick?: (runStepId: string) => void  // WorkflowRunStep.id, not WorkflowStep.id
+  selectedRunStepId?: string                 // WorkflowRunStep.id currently selected
 }
 ```
 
@@ -90,6 +90,8 @@ Chip colors match existing `runStatusVariant`: green (success), yellow (running)
 `runSteps` contains one entry per (workflow_step, node) combination. Group by `workflow_step_id`, then display each node's status as a chip inside the step card.
 
 Chip label: node name (from `nodeMap`). Falls back to `node_id.slice(0, 6)` if node not found.
+
+Clicking a chip calls `onStepClick` with that chip's `WorkflowRunStep.id` — this is the same ID the existing log panel uses (`selectedStep.job_id`). The card itself (not a chip) is not clickable in run view; only individual node chips are.
 
 ## WorkflowRunMonitor layout change
 
