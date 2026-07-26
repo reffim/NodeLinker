@@ -9,7 +9,7 @@ import { getWorkflowRun, cancelWorkflowRun, getWorkflow } from '@/api/workflows'
 import { listPlaybooks } from '@/api/playbooks'
 import { listNodes } from '@/api/nodes'
 import { useWorkflowRunWS } from '@/hooks/useWorkflowRunWS'
-import type { WorkflowRun, WorkflowRunStep } from '@/types'
+import type { WorkflowRun } from '@/types'
 import { WorkflowGraph } from '@/components/WorkflowGraph'
 
 function runStatusVariant(
@@ -23,7 +23,6 @@ function runStatusVariant(
     default: return 'outline'
   }
 }
-
 
 export default function WorkflowRunMonitor() {
   const { runId } = useParams<{ runId: string }>()
