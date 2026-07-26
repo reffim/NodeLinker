@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, ChevronDown, ChevronRight, Loader2, CheckCircle, XCircle, Minus, Circle } from 'lucide-react'
+import { ArrowLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { LogPanel } from '@/components/LogPanel'
@@ -10,6 +10,7 @@ import { listPlaybooks } from '@/api/playbooks'
 import { listNodes } from '@/api/nodes'
 import { useWorkflowRunWS } from '@/hooks/useWorkflowRunWS'
 import type { WorkflowRun, WorkflowRunStep } from '@/types'
+import { WorkflowGraph } from '@/components/WorkflowGraph'
 
 function runStatusVariant(
   status: WorkflowRun['status'],
@@ -23,27 +24,6 @@ function runStatusVariant(
   }
 }
 
-function StepStatusIcon({ status }: { status: WorkflowRunStep['status'] }) {
-  switch (status) {
-    case 'success':
-      return <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
-    case 'failed':
-      return <XCircle className="h-4 w-4 text-red-500 flex-shrink-0" />
-    case 'running':
-      return <Loader2 className="h-4 w-4 text-yellow-500 animate-spin flex-shrink-0" />
-    case 'skipped':
-      return <Minus className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-    default:
-      return <Circle className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-  }
-}
-
-function deriveNodeStatus(steps: WorkflowRunStep[]): WorkflowRun['status'] {
-  if (steps.some((s) => s.status === 'running')) return 'running'
-  if (steps.some((s) => s.status === 'failed')) return 'failed'
-  if (steps.every((s) => s.status === 'success' || s.status === 'skipped')) return 'success'
-  return 'pending'
-}
 
 export default function WorkflowRunMonitor() {
   const { runId } = useParams<{ runId: string }>()
@@ -87,19 +67,8 @@ export default function WorkflowRunMonitor() {
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null)
   const [cancelError, setCancelError] = useState<string | null>(null)
 
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set())
-
-  const toggleNode = (nodeId: string) => {
-    setExpandedNodes((prev) => {
-      const next = new Set(prev)
-      next.has(nodeId) ? next.delete(nodeId) : next.add(nodeId)
-      return next
-    })
-  }
-
   const playbookMap = new Map(playbooks.map((pb) => [pb.id, pb]))
   const stepDefMap = new Map(workflow?.steps.map((s) => [s.id, s]) ?? [])
-  const stepOrderMap = new Map(workflow?.steps.map((s) => [s.id, s.order]) ?? [])
   const nodeMap = new Map(nodes.map((n) => [n.id, n]))
 
   const displayStatus = (runStatus ?? run?.status ?? 'pending') as WorkflowRun['status']
@@ -110,32 +79,14 @@ export default function WorkflowRunMonitor() {
     run && TERMINAL_STATUSES.has(run.status) && steps.every((s) => s.status === 'pending')
   const displaySteps = wsStepsMissed ? (run?.workflow_run_steps ?? steps) : steps
 
-  // Auto-expand: any node_id not yet in set gets added (defaults to expanded)
-  useEffect(() => {
-    setExpandedNodes((prev) => {
-      const next = new Set(prev)
-      for (const s of displaySteps) {
-        if (s.node_id && !next.has(s.node_id)) next.add(s.node_id)
-      }
-      return next
-    })
-  }, [displaySteps])
-
   // Auto-select: running step while active; failed step (or first) once terminal
   useEffect(() => {
     const running = displaySteps.find((s) => s.status === 'running')
     if (running) {
       setSelectedStepId(running.id)
-      if (running.node_id) {
-        setExpandedNodes((prev) => new Set([...prev, running.node_id!]))
-      }
     } else if (!selectedStepId && displaySteps.length > 0) {
       const failed = displaySteps.find((s) => s.status === 'failed')
-      const target = failed ?? displaySteps[0]
-      setSelectedStepId(target.id)
-      if (target.node_id) {
-        setExpandedNodes((prev) => new Set([...prev, target.node_id!]))
-      }
+      setSelectedStepId((failed ?? displaySteps[0]).id)
     }
   }, [displaySteps, selectedStepId])
 
@@ -149,13 +100,6 @@ export default function WorkflowRunMonitor() {
   })
 
   const selectedStep = displaySteps.find((s) => s.id === selectedStepId) ?? null
-
-  const stepsByNode = new Map<string, WorkflowRunStep[]>()
-  for (const step of displaySteps) {
-    const nid = step.node_id ?? 'unknown'
-    if (!stepsByNode.has(nid)) stepsByNode.set(nid, [])
-    stepsByNode.get(nid)!.push(step)
-  }
 
   return (
     <div className="flex h-full">
@@ -207,62 +151,15 @@ export default function WorkflowRunMonitor() {
           </div>
         )}
 
-        <div className="flex-1 overflow-y-auto">
-          {Array.from(stepsByNode.entries()).map(([nodeId, nodeSteps]) => {
-            const node = nodeMap.get(nodeId)
-            const isExpanded = expandedNodes.has(nodeId)
-            const nodeSummary = deriveNodeStatus(nodeSteps)
-            return (
-              <div key={nodeId} className="border-b border-border">
-                <button
-                  onClick={() => toggleNode(nodeId)}
-                  className="w-full text-left px-4 py-2.5 flex items-center gap-2 bg-muted/30 hover:bg-muted/50 transition-colors"
-                >
-                  {isExpanded
-                    ? <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
-                    : <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
-                  }
-                  <span className="text-sm font-medium flex-1 truncate">
-                    {node?.name ?? nodeId.slice(0, 8)}
-                  </span>
-                  <Badge variant={runStatusVariant(nodeSummary)} className="text-[10px]">
-                    {nodeSummary}
-                  </Badge>
-                </button>
-                {isExpanded && nodeSteps.map((runStep) => {
-                  const stepDef = stepDefMap.get(runStep.workflow_step_id)
-                  const pb = stepDef ? playbookMap.get(stepDef.playbook_id) : undefined
-                  const failOrder =
-                    stepDef?.on_failure_step_id
-                      ? stepOrderMap.get(stepDef.on_failure_step_id)
-                      : undefined
-                  const stepOrder = stepDef?.order ?? 0
-                  return (
-                    <button
-                      key={runStep.id}
-                      onClick={() => setSelectedStepId(runStep.id)}
-                      className={`w-full text-left pl-8 pr-4 py-2.5 hover:bg-accent transition-colors flex items-start gap-3 border-t border-border/50 ${
-                        selectedStepId === runStep.id ? 'bg-accent' : ''
-                      }`}
-                    >
-                      <StepStatusIcon status={runStep.status} />
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium">Step {stepOrder}</div>
-                        <div className="text-xs text-muted-foreground truncate">
-                          {pb?.name ?? 'Unknown playbook'}
-                        </div>
-                        {failOrder !== undefined && (
-                          <div className="text-xs text-muted-foreground">
-                            → Step {failOrder} on failure
-                          </div>
-                        )}
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
-            )
-          })}
+        <div className="flex-1 min-h-0">
+          <WorkflowGraph
+            steps={workflow?.steps ?? []}
+            playbookMap={playbookMap}
+            runSteps={displaySteps}
+            nodeMap={nodeMap}
+            onStepClick={setSelectedStepId}
+            selectedRunStepId={selectedStepId ?? undefined}
+          />
         </div>
 
         {(run?.started_at || run?.finished_at) && (
