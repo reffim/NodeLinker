@@ -371,23 +371,24 @@ def run_workflow(workflow_run_id: str) -> dict:
 
 @celery_app.task(name="app.worker.tasks.workflow_runner.sweep_stale_runs", bind=False)
 def sweep_stale_runs() -> dict:
-    """Mark workflow runs stuck in 'running' for over STALE_RUN_THRESHOLD_MINUTES as failed."""
+    """Mark workflow runs stuck in 'running' or 'pending' for too long as failed."""
     async def _sweep() -> int:
         threshold = datetime.now(timezone.utc) - timedelta(minutes=STALE_RUN_THRESHOLD_MINUTES)
         async with async_session_factory() as session:
             res = await session.execute(
                 select(WorkflowRun).where(
                     and_(
-                        WorkflowRun.status == "running",
-                        WorkflowRun.started_at < threshold,
+                        WorkflowRun.status.in_(["running", "pending"]),
+                        WorkflowRun.created_at < threshold,
                     )
                 )
             )
             stale = res.scalars().all()
+            now = datetime.now(timezone.utc)
             for run in stale:
                 run.status = "failed"
-                run.finished_at = datetime.now(timezone.utc)
-                logger.warning("sweep: marking stale workflow run %s as failed", run.id)
+                run.finished_at = now
+                logger.warning("sweep: marking stale workflow run %s (was %s) as failed", run.id, run.status)
             await session.commit()
             return len(stale)
 
