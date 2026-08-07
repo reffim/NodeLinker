@@ -98,8 +98,9 @@ async def _build_inventory(node: Any, credential_data: dict | None, private_data
         elif "password" in credential_data:
             host_vars["ansible_ssh_pass"] = credential_data["password"]
 
+    safe_name = node.name.replace("\n", "").replace("\r", "").replace(" ", "_")
     vars_str = " ".join(f"{k}={v}" for k, v in host_vars.items())
-    (inv_dir / "hosts").write_text(f"[targets]\n{node.name} {vars_str}\n")
+    (inv_dir / "hosts").write_text(f"[targets]\n{safe_name} {vars_str}\n")
 
 
 def _write_playbook(content: str, private_data_dir: str, name: str = "site.yml") -> str:

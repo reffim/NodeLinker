@@ -61,7 +61,7 @@ async def create_credential(
         logger.error("create_credential: vault write failed: %s", exc)
         raise HTTPException(status_code=502, detail=f"Vault write failed: {exc}")
 
-    # Persist metadata in PostgreSQL (no secret material stored here)
+    # Persist metadata in PostgreSQL; rollback Vault write on DB failure
     credential = Credential(
         name=payload.name,
         type=payload.type,
@@ -69,7 +69,15 @@ async def create_credential(
         created_by=current_user.id,
     )
     db.add(credential)
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception as exc:
+        logger.error("create_credential: db commit failed, rolling back vault write: %s", exc)
+        try:
+            await delete_credential(payload.vault_path)
+        except Exception as vault_exc:
+            logger.error("create_credential: vault rollback also failed: %s", vault_exc)
+        raise HTTPException(status_code=500, detail="Failed to save credential")
     await db.refresh(credential)
     return credential
 

@@ -12,6 +12,7 @@ import { listPlaybooks } from '@/api/playbooks'
 import { listNodes } from '@/api/nodes'
 import { useAuthStore } from '@/stores/auth'
 import type { WorkflowCreate, WorkflowRun } from '@/types'
+import { WorkflowGraph } from '@/components/WorkflowGraph'
 
 function runStatusVariant(
   status: WorkflowRun['status'],
@@ -355,9 +356,6 @@ export default function WorkflowList() {
   })
 
   const playbookMap = new Map(playbooks.map((pb) => [pb.id, pb]))
-  const stepOrderMap = new Map(
-    selectedWorkflow?.steps.map((s) => [s.id, s.order]) ?? [],
-  )
 
   function handleDelete() {
     if (!workflowId || !confirm(`Delete "${selectedWorkflow?.name}"? This cannot be undone.`))
@@ -448,32 +446,11 @@ export default function WorkflowList() {
             {/* Steps */}
             <div>
               <h2 className="text-sm font-semibold mb-2">Steps</h2>
-              <div className="border border-border rounded-md divide-y divide-border">
-                {selectedWorkflow.steps
-                  .slice()
-                  .sort((a, b) => a.order - b.order)
-                  .map((step) => {
-                    const pb = playbookMap.get(step.playbook_id)
-                    const failOrder =
-                      step.on_failure_step_id
-                        ? stepOrderMap.get(step.on_failure_step_id)
-                        : undefined
-                    return (
-                      <div key={step.id} className="px-4 py-3 flex items-center gap-3">
-                        <span className="text-xs font-mono text-muted-foreground w-12 flex-shrink-0">
-                          Step {step.order}
-                        </span>
-                        <span className="flex-1 text-sm">
-                          {pb?.name ?? step.playbook_id.slice(0, 8)}
-                        </span>
-                        {failOrder !== undefined && (
-                          <span className="text-xs text-muted-foreground">
-                            → Step {failOrder} on failure
-                          </span>
-                        )}
-                      </div>
-                    )
-                  })}
+              <div className="h-72 rounded-md border border-border overflow-hidden">
+                <WorkflowGraph
+                  steps={selectedWorkflow.steps}
+                  playbookMap={playbookMap}
+                />
               </div>
             </div>
 
