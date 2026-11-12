@@ -37,7 +37,7 @@ function StepNode({ data }: NodeProps<StepRFNode>) {
     <div
       className={`bg-card border rounded-md px-3 py-2 min-w-[180px] shadow-sm ${
         data.isSelected ? 'border-primary ring-1 ring-primary' : 'border-border'
-      }`}
+      } ${data.chips && data.chips.length > 0 ? 'cursor-pointer' : ''}`}
     >
       <Handle type="target" position={Position.Top} className="!bg-border" />
       <div className="text-xs text-muted-foreground">Step {data.order}</div>
@@ -49,7 +49,11 @@ function StepNode({ data }: NodeProps<StepRFNode>) {
             {data.chips.map((chip) => (
               <button
                 key={chip.runStepId}
-                onClick={() => data.onChipClick?.(chip.runStepId)}
+                onClick={(e) => {
+                  // Don't let the card-level onNodeClick override the chosen chip
+                  e.stopPropagation()
+                  data.onChipClick?.(chip.runStepId)
+                }}
                 className="flex items-center gap-1 text-xs bg-muted rounded px-1.5 py-0.5 hover:bg-accent transition-colors"
               >
                 <ChipIcon status={chip.status} />
@@ -152,6 +156,13 @@ export function WorkflowGraph({
       nodesDraggable={false}
       nodesConnectable={false}
       elementsSelectable={false}
+      onNodeClick={(_, node) => {
+        // Clicking the step card selects its first run step (per-node chips pick a specific one)
+        const rss = runStepsByWorkflowStep.get(node.id)
+        if (!onStepClick || !rss || rss.length === 0) return
+        if (rss.some((rs) => rs.id === selectedRunStepId)) return
+        onStepClick(rss[0].id)
+      }}
     >
       <Background gap={16} size={1} />
       <Controls showInteractive={false} />

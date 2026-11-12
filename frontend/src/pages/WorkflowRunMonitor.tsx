@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams, useNavigate } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
@@ -63,7 +63,8 @@ export default function WorkflowRunMonitor() {
     run?.status,
   )
 
-  const [selectedStepId, setSelectedStepId] = useState<string | null>(null)
+  // Step the user clicked; once set, it takes precedence over auto-selection
+  const [manualStepId, setManualStepId] = useState<string | null>(null)
   const [cancelError, setCancelError] = useState<string | null>(null)
 
   const playbookMap = new Map(playbooks.map((pb) => [pb.id, pb]))
@@ -73,21 +74,23 @@ export default function WorkflowRunMonitor() {
   const displayStatus = (runStatus ?? run?.status ?? 'pending') as WorkflowRun['status']
   const isActive = displayStatus === 'pending' || displayStatus === 'running'
 
-  // Fall back to REST data when WS events were missed (run terminal but all steps still pending)
-  const wsStepsMissed =
-    run && TERMINAL_STATUSES.has(run.status) && steps.every((s) => s.status === 'pending')
-  const displaySteps = wsStepsMissed ? (run?.workflow_run_steps ?? steps) : steps
+  // steps = WS updates merged with REST refreshes (see useWorkflowRunWS)
+  const displaySteps = steps
 
-  // Auto-select: running step while active; failed step (or first) once terminal
-  useEffect(() => {
-    const running = displaySteps.find((s) => s.status === 'running')
-    if (running) {
-      setSelectedStepId(running.id)
-    } else if (!selectedStepId && displaySteps.length > 0) {
-      const failed = displaySteps.find((s) => s.status === 'failed')
-      setSelectedStepId((failed ?? displaySteps[0]).id)
-    }
-  }, [displaySteps, selectedStepId])
+  // Auto-selection (until the user clicks a step): running step while active,
+  // then the failed step, then the most recently started step, then the first
+  const lastStarted = displaySteps
+    .filter((s) => s.started_at)
+    .reduce<(typeof displaySteps)[number] | undefined>(
+      (latest, s) => (!latest || s.started_at! > latest.started_at! ? s : latest),
+      undefined,
+    )
+  const autoStep =
+    displaySteps.find((s) => s.status === 'running') ??
+    displaySteps.find((s) => s.status === 'failed') ??
+    lastStarted ??
+    displaySteps[0]
+  const selectedStepId = manualStepId ?? autoStep?.id ?? null
 
   const cancelMutation = useMutation({
     mutationFn: () => cancelWorkflowRun(runId!),
@@ -156,7 +159,7 @@ export default function WorkflowRunMonitor() {
             playbookMap={playbookMap}
             runSteps={displaySteps}
             nodeMap={nodeMap}
-            onStepClick={setSelectedStepId}
+            onStepClick={setManualStepId}
             selectedRunStepId={selectedStepId ?? undefined}
           />
         </div>

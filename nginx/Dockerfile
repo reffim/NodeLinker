@@ -1,5 +1,5 @@
 # ---- Frontend build stage ----
-FROM node:22-alpine AS frontend-builder
+FROM docker.io/library/node:22-alpine AS frontend-builder
 
 WORKDIR /app
 
@@ -10,7 +10,7 @@ COPY frontend/ .
 RUN npm run build
 
 # ---- Production Nginx stage ----
-FROM nginx:1.27-alpine AS production
+FROM docker.io/library/nginx:1.27-alpine AS production
 
 # Remove default nginx config
 RUN rm /etc/nginx/conf.d/default.conf
