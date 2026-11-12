@@ -18,7 +18,33 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-COMPOSE="docker compose -f $PROJECT_ROOT/docker-compose.yml -f $PROJECT_ROOT/docker-compose.dev.yml"
+PROJECT_NAME="${COMPOSE_PROJECT_NAME:-project_minerva}"
+
+# 컨테이너 엔진 선택: CONTAINER_ENGINE=docker|podman 으로 강제 가능, 미지정 시 자동 감지
+# (docker compose → docker-compose → podman-compose 순)
+_detect_engine() {
+    local want="${CONTAINER_ENGINE:-}"
+    # docker는 데몬 접근 권한까지 있어야 사용 (docker 그룹 미포함 시 podman으로 폴백)
+    if { [ -z "$want" ] || [ "$want" = "docker" ]; } && docker info >/dev/null 2>&1; then
+        if docker compose version >/dev/null 2>&1; then
+            ENGINE="docker"; _compose_bin="docker compose"; return
+        elif command -v docker-compose >/dev/null 2>&1; then
+            ENGINE="docker"; _compose_bin="docker-compose"; return
+        fi
+    fi
+    if [ -z "$want" ] || [ "$want" = "podman" ]; then
+        if command -v podman-compose >/dev/null 2>&1; then
+            ENGINE="podman"; _compose_bin="podman-compose"; return
+        fi
+    fi
+    echo "✗ 사용 가능한 compose 도구를 찾을 수 없습니다${want:+ (CONTAINER_ENGINE=$want)}." >&2
+    echo "  다음 중 하나를 설치하세요:" >&2
+    echo "    sudo apt install docker-compose-v2   # Docker" >&2
+    echo "    sudo apt install podman-compose      # Podman" >&2
+    exit 1
+}
+_detect_engine
+COMPOSE="$_compose_bin -p $PROJECT_NAME -f $PROJECT_ROOT/docker-compose.yml -f $PROJECT_ROOT/docker-compose.dev.yml"
 
 # Vault가 데이터를 갖고 있는지 확인
 _vault_has_data() {
@@ -30,21 +56,52 @@ _vault_has_data() {
 }
 
 # 인프라 서비스(db/redis/vault)가 healthy 상태가 될 때까지 대기
+# 서비스 컨테이너의 health 상태 (docker compose / podman-compose 공통 라벨로 조회)
+_health_of() {
+    local id
+    id=$($ENGINE ps -q \
+        --filter "label=com.docker.compose.project=$PROJECT_NAME" \
+        --filter "label=com.docker.compose.service=$1" 2>/dev/null | head -n1)
+    [ -n "$id" ] || { echo "missing"; return; }
+    $ENGINE inspect -f '{{.State.Health.Status}}' "$id" 2>/dev/null || echo "unknown"
+}
+
 _wait_healthy() {
-    echo "인프라 서비스 준비 대기 중..."
-    local max=30 count=0
-    until $COMPOSE ps db redis vault 2>/dev/null | grep -q "healthy"; do
-        sleep 2
+    echo "인프라 서비스 준비 대기 중... (engine: $ENGINE)"
+    local max=60 count=0 svc pending
+    while :; do
+        pending=""
+        for svc in db redis vault; do
+            [ "$(_health_of "$svc")" = "healthy" ] || pending="$pending $svc"
+        done
+        [ -z "$pending" ] && break
         count=$((count + 1))
         if [ "$count" -ge "$max" ]; then
-            echo "✗ 타임아웃: 인프라 서비스가 healthy 상태가 되지 않았습니다." >&2
+            echo "✗ 타임아웃: healthy 상태가 아닌 서비스:$pending" >&2
             exit 1
         fi
+        sleep 2
     done
     echo "  → 인프라 ready"
 }
 
+# 백엔드 API가 응답할 때까지 대기 (alembic 마이그레이션 + uvicorn 기동 시간)
+_wait_backend() {
+    echo "백엔드 준비 대기 중..."
+    local max=60 count=0
+    until [ "$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/api/docs 2>/dev/null || true)" = "200" ]; do
+        count=$((count + 1))
+        if [ "$count" -ge "$max" ]; then
+            echo "✗ 타임아웃: 백엔드가 응답하지 않습니다. './dev/local.sh logs backend' 확인" >&2
+            exit 1
+        fi
+        sleep 2
+    done
+    echo "  → 백엔드 ready"
+}
+
 _seed() {
+    _wait_backend
     echo "Vault 시드 실행 중..."
     bash "$SCRIPT_DIR/seed-local.sh"
 }

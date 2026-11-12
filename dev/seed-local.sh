@@ -137,48 +137,40 @@ else
   echo "  → Credential created. ID: ${CRED_ID}"
 fi
 
-# Register test node
-# host = 'test-node' (Docker service name; resolvable inside the Docker network
-#   by celery-worker/backend). From host, SSH is accessible at localhost:2222.
-NODE_RESP=$(curl -s -b "$COOKIE_JAR" \
-  -X POST "${API_URL}/nodes" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"name\": \"test-node-01\",
-    \"host\": \"test-node\",
-    \"port\": 22,
-    \"ssh_user\": \"testuser\",
-    \"credential_id\": \"${CRED_ID}\",
-    \"tags\": [\"dev\", \"test\"]
-  }")
+# Register test nodes (idempotent: skip if a node with the same name exists)
+# host = Docker service name; resolvable inside the compose network by
+#   celery-worker/backend. From host, SSH is accessible at localhost:2222/2223.
+EXISTING_NODES=$(curl -s -b "$COOKIE_JAR" "${API_URL}/nodes")
 
-NODE_ID=$(echo "$NODE_RESP" | jq -r '.id // empty' 2>/dev/null)
+register_node() {
+  local name="$1" host="$2" existing_id resp node_id
+  existing_id=$(echo "$EXISTING_NODES" \
+    | jq -r --arg n "$name" 'if type=="array" then (map(select(.name==$n)) | .[0].id // empty) else empty end' 2>/dev/null)
+  if [ -n "$existing_id" ]; then
+    echo "  → ${name} already registered. ID: ${existing_id} — skip"
+    return
+  fi
+  resp=$(curl -s -b "$COOKIE_JAR" \
+    -X POST "${API_URL}/nodes" \
+    -H "Content-Type: application/json" \
+    -d "{
+      \"name\": \"${name}\",
+      \"host\": \"${host}\",
+      \"port\": 22,
+      \"ssh_user\": \"testuser\",
+      \"credential_id\": \"${CRED_ID}\",
+      \"tags\": [\"dev\", \"test\"]
+    }")
+  node_id=$(echo "$resp" | jq -r '.id // empty' 2>/dev/null)
+  if [ -z "$node_id" ]; then
+    echo "  ✗ ${name} registration failed. Response: ${resp}"
+  else
+    echo "  → ${name} registered. ID: ${node_id}"
+  fi
+}
 
-if [ -z "$NODE_ID" ]; then
-  echo "  → test-node-01 may already exist or creation failed. Response: ${NODE_RESP}"
-else
-  echo "  → test-node-01 registered. ID: ${NODE_ID}"
-fi
-
-NODE2_RESP=$(curl -s -b "$COOKIE_JAR" \
-  -X POST "${API_URL}/nodes" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"name\": \"test-node-02\",
-    \"host\": \"test-node-2\",
-    \"port\": 22,
-    \"ssh_user\": \"testuser\",
-    \"credential_id\": \"${CRED_ID}\",
-    \"tags\": [\"dev\", \"test\"]
-  }")
-
-NODE2_ID=$(echo "$NODE2_RESP" | jq -r '.id // empty' 2>/dev/null)
-
-if [ -z "$NODE2_ID" ]; then
-  echo "  → test-node-02 may already exist or creation failed. Response: ${NODE2_RESP}"
-else
-  echo "  → test-node-02 registered. ID: ${NODE2_ID}"
-fi
+register_node "test-node-01" "test-node"
+register_node "test-node-02" "test-node-2"
 
 echo ""
 echo "=== Seed Complete ==="

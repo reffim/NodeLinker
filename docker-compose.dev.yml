@@ -49,6 +49,3 @@ services:
       target: development
     volumes:
       - ./backend:/app
-
-volumes:
-  logdata:
