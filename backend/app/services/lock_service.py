@@ -44,6 +44,7 @@ end
 """
 
 
+
 def _lock_key(node_id: str, playbook_group: str) -> str:
     return f"node:{node_id}:exclusive:{playbook_group}"
 

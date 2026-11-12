@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3)",
+      "Bash(.venv/bin/pytest tests/test_workflows_api.py::test_workflow_models_importable -v)",
+      "Bash(git -C /home/reffim/workspace/project_minerva log --oneline -3)",
+      "Bash(grep \"\\\\.py$\")",
+      "Bash(.venv/bin/python -c ' *)",
+      "Bash(.venv/bin/python3)",
+      "Bash(.venv/bin/pytest tests/test_workflows_api.py::test_workflow_schemas_importable tests/test_workflows_api.py::test_workflow_create_validates_steps tests/test_workflows_api.py::test_workflow_run_create_requires_node_ids -v)",
+      "Bash(.venv/bin/pytest tests/test_workflows_api.py -v)",
+      "Bash(.venv/bin/pytest tests/ -v)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(.venv/bin/pytest tests/test_workflows_api.py::test_workflow_ws_handler_importable -v)",
+      "Read(//opt/antigravity/**)",
+      "Read(//opt/antigravity/resources/**)",
+      "Read(//opt/**)"
+    ]
+  }
+}
